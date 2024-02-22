@@ -13,7 +13,9 @@ from pr_agent.tools.pr_code_suggestions import PRCodeSuggestions
 from pr_agent.tools.pr_config import PRConfig
 from pr_agent.tools.pr_description import PRDescription
 from pr_agent.tools.pr_generate_labels import PRGenerateLabels
+from pr_agent.tools.pr_help_message import PRHelpMessage
 from pr_agent.tools.pr_information_from_user import PRInformationFromUser
+from pr_agent.tools.pr_line_questions import PR_LineQuestions
 from pr_agent.tools.pr_questions import PRQuestions
 from pr_agent.tools.pr_reviewer import PRReviewer
 from pr_agent.tools.pr_similar_issue import PRSimilarIssue
@@ -32,9 +34,11 @@ command2class = {
     "improve_code": PRCodeSuggestions,
     "ask": PRQuestions,
     "ask_question": PRQuestions,
+    "ask_line": PR_LineQuestions,
     "update_changelog": PRUpdateChangelog,
     "config": PRConfig,
     "settings": PRConfig,
+    "help": PRHelpMessage,
     "similar_issue": PRSimilarIssue,
     "add_docs": PRAddDocs,
     "generate_labels": PRGenerateLabels,

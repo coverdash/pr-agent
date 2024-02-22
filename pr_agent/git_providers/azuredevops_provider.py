@@ -10,12 +10,16 @@ from .git_provider import GitProvider
 from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 
 AZURE_DEVOPS_AVAILABLE = True
+ADO_APP_CLIENT_DEFAULT_ID = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+MAX_PR_DESCRIPTION_AZURE_LENGTH = 4000-1
 
 try:
     # noinspection PyUnresolvedReferences
     from msrest.authentication import BasicAuthentication
     # noinspection PyUnresolvedReferences
     from azure.devops.connection import Connection
+    # noinspection PyUnresolvedReferences
+    from azure.identity import DefaultAzureCredential
     # noinspection PyUnresolvedReferences
     from azure.devops.v7_1.git.models import (
         Comment,
@@ -38,7 +42,7 @@ class AzureDevopsProvider(GitProvider):
             )
 
         self.azure_devops_client = self._get_azure_devops_client()
-
+        self.diff_files = None
         self.workspace_slug = None
         self.repo_slug = None
         self.repo = None
@@ -124,6 +128,19 @@ class AzureDevopsProvider(GitProvider):
     def get_pr_description_full(self) -> str:
         return self.pr.description
 
+    def edit_comment(self, comment, body: str):
+        try:
+            self.azure_devops_client.update_comment(
+                repository_id=self.repo_slug,
+                pull_request_id=self.pr_num,
+                thread_id=comment["thread_id"],
+                comment_id=comment["comment_id"],
+                comment=Comment(content=body),
+                project=self.workspace_slug,
+            )
+        except Exception as e:
+            get_logger().exception(f"Failed to edit comment, error: {e}")
+
     def remove_comment(self, comment):
         try:
             self.azure_devops_client.delete_comment(
@@ -181,7 +198,7 @@ class AzureDevopsProvider(GitProvider):
                 include_content=True,
                 path=".pr_agent.toml",
             )
-            return contents
+            return list(contents)[0]
         except Exception as e:
             if get_settings().config.verbosity_level >= 2:
                 get_logger().error(f"Failed to get repo settings, error: {e}")
@@ -206,6 +223,10 @@ class AzureDevopsProvider(GitProvider):
 
     def get_diff_files(self) -> list[FilePatchInfo]:
         try:
+
+            if self.diff_files:
+                return self.diff_files
+
             base_sha = self.pr.last_merge_target_commit
             head_sha = self.pr.last_merge_source_commit
 
@@ -303,7 +324,7 @@ class AzureDevopsProvider(GitProvider):
                         edit_type=edit_type,
                     )
                 )
-
+            self.diff_files = diff_files
             return diff_files
         except Exception as e:
             print(f"Error: {str(e)}")
@@ -318,12 +339,29 @@ class AzureDevopsProvider(GitProvider):
             repository_id=self.repo_slug,
             pull_request_id=self.pr_num,
         )
+        response = {"thread_id": thread_response.id, "comment_id": thread_response.comments[0].id}
         if is_temporary:
-            self.temp_comments.append(
-                {"thread_id": thread_response.id, "comment_id": thread_response.comments[0].id}
-            )
+            self.temp_comments.append(response)
+        return response
 
     def publish_description(self, pr_title: str, pr_body: str):
+        if len(pr_body) > MAX_PR_DESCRIPTION_AZURE_LENGTH:
+
+            usage_guide_text='<details> <summary><strong>✨ Describe tool usage guide:</strong></summary><hr>'
+            ind = pr_body.find(usage_guide_text)
+            if ind != -1:
+                pr_body = pr_body[:ind]
+
+            if len(pr_body) > MAX_PR_DESCRIPTION_AZURE_LENGTH:
+                changes_walkthrough_text = '## **Changes walkthrough**'
+                ind = pr_body.find(changes_walkthrough_text)
+                if ind != -1:
+                    pr_body = pr_body[:ind]
+
+            if len(pr_body) > MAX_PR_DESCRIPTION_AZURE_LENGTH:
+                trunction_message = " ... (description truncated due to length limit)"
+                pr_body = pr_body[:MAX_PR_DESCRIPTION_AZURE_LENGTH - len(trunction_message)] + trunction_message
+                get_logger().warning("PR description was truncated due to length limit")
         try:
             updated_pr = GitPullRequest()
             updated_pr.title = pr_title
@@ -444,7 +482,7 @@ class AzureDevopsProvider(GitProvider):
             "Azure DevOps provider does not support issue comments yet"
         )
 
-    def add_eyes_reaction(self, issue_comment_id: int) -> Optional[int]:
+    def add_eyes_reaction(self, issue_comment_id: int, disable_eyes: bool = False) -> Optional[int]:
         return True
 
     def remove_reaction(self, issue_comment_id: int, reaction_id: int) -> bool:
@@ -472,13 +510,30 @@ class AzureDevopsProvider(GitProvider):
 
     @staticmethod
     def _get_azure_devops_client():
-        try:
-            pat = get_settings().azure_devops.pat
-            org = get_settings().azure_devops.org
-        except AttributeError as e:
-            raise ValueError("Azure DevOps PAT token is required ") from e
+        org = get_settings().azure_devops.get("org", None)
+        pat = get_settings().azure_devops.get("pat", None)
 
-        credentials = BasicAuthentication("", pat)
+        if not org:
+            raise ValueError("Azure DevOps organization is required")
+
+        if pat:
+            auth_token = pat
+        else:
+            try:
+                # try to use azure default credentials
+                # see https://learn.microsoft.com/en-us/python/api/overview/azure/identity-readme?view=azure-python
+                # for usage and env var configuration of user-assigned managed identity, local machine auth etc.
+                get_logger().info("No PAT found in settings, trying to use Azure Default Credentials.")
+                credentials = DefaultAzureCredential()
+                accessToken = credentials.get_token(ADO_APP_CLIENT_DEFAULT_ID)
+                auth_token = accessToken.token
+            except Exception as e:
+                get_logger().error(f"No PAT found in settings, and Azure Default Authentication failed, error: {e}")
+                raise
+
+        credentials = BasicAuthentication("", auth_token)
+
+        credentials = BasicAuthentication("", auth_token)
         azure_devops_connection = Connection(base_url=org, creds=credentials)
         azure_devops_client = azure_devops_connection.clients.get_git_client()
 
@@ -508,3 +563,4 @@ class AzureDevopsProvider(GitProvider):
             if get_settings().config.verbosity_level >= 2:
                 get_logger().error(f"Failed to get pr id, error: {e}")
             return ""
+

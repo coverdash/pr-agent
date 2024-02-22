@@ -103,13 +103,17 @@ class PRDescription:
 
             # Add help text if gfm_markdown is supported
             if self.git_provider.is_supported("gfm_markdown") and get_settings().pr_description.enable_help_text:
-                pr_body += "<hr>\n\n<details> <summary><strong>✨ Usage guide:</strong></summary><hr> \n\n"
+                pr_body += "<hr>\n\n<details> <summary><strong>✨ Describe tool usage guide:</strong></summary><hr> \n\n"
                 pr_body += HelpMessage.get_describe_usage_guide()
                 pr_body += "\n</details>\n"
+            elif get_settings().pr_description.enable_help_comment:
+                pr_body +="\n\n___\n\n> ✨ **PR-Agent usage**:"
+                pr_body +="\n>Comment `/help` on the PR to get a list of all available PR-Agent tools and their descriptions\n\n"
+
 
             # final markdown description
             full_markdown_description = f"## Title\n\n{pr_title}\n\n___\n{pr_body}"
-            get_logger().debug(f"full_markdown_description:\n{full_markdown_description}")
+            # get_logger().debug(f"full_markdown_description:\n{full_markdown_description}")
 
             if get_settings().config.publish_output:
                 get_logger().info(f"Pushing answer {self.pr_id}")

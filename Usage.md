@@ -6,7 +6,9 @@
 - [Online Usage](#online-usage)
 - [GitHub App](#working-with-github-app)
 - [GitHub Action](#working-with-github-action)
+- [GitLab Webhook](#working-with-gitlab-webhook)
 - [BitBucket App](#working-with-bitbucket-self-hosted-app)
+- [Azure DevOps Provider](#azure-devops-provider)
 - [Additional Configurations Walkthrough](#appendix---additional-configurations-walkthrough)
 
 ### Introduction
@@ -208,6 +210,12 @@ user="""
 ```
 Note that the new prompt will need to generate an output compatible with the relevant [post-process function](./pr_agent/tools/pr_description.py#L137).
 
+#### Managing notifications
+If you are subscribed to notifications for a repo with PR-Agent, we recommend turning off notifications for PR comments, to avoid lengthy emails:
+
+<kbd><img src="https://codium.ai/images/pr_agent/notifications.png" width="512"></kbd>
+
+
 ### Working with GitHub Action
 `GitHub Action` is a different way to trigger PR-Agent tools, and uses a different configuration mechanism than `GitHub App`.
 You can configure settings for `GitHub Action` by adding environment variables under the env section in `.github/workflows/pr_agent.yml` file. 
@@ -229,6 +237,16 @@ For example, you can set an environment variable: `pr_description.add_original_u
 ```
 [pr_description]
 add_original_user_description = false
+```
+### Working with GitLab Webhook
+After setting up a GitLab webhook, to control which commands will run automatically when a new PR is opened, you can set the `pr_commands` parameter in the configuration file, similar to the GitHub App:
+```
+[gitlab]
+pr_commands = [
+    "/describe --pr_description.add_original_user_description=true --pr_description.keep_original_user_title=true",
+    "/review --pr_reviewer.num_code_suggestions=0",
+    "/improve",
+]
 ```
 
 ### Working with BitBucket Self-Hosted App
@@ -260,6 +278,52 @@ If not set, the default option is that only the `review` tool will run automatic
 
 Note that due to limitations of the bitbucket platform, the `auto_describe` tool will be able to publish a PR description only as a comment. 
 In addition, some subsections like `PR changes walkthrough` will not appear, since they require the usage of collapsible sections, which are not supported by bitbucket.
+
+### Azure DevOps provider
+
+To use Azure DevOps provider use the following settings in configuration.toml:
+```
+[config]
+git_provider="azure"
+use_repo_settings_file=false
+```
+
+Azure DevOps provider supports [PAT token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops&tabs=Windows) or [DefaultAzureCredential](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication-overview#authentication-in-server-environments) authentication.
+PAT is faster to create, but has build in experation date, and will use the user identity for API calls. 
+Using DefaultAzureCredential you can use managed identity or Service principle, which are more secure and will create seperate ADO user identity (via AAD) to the agent.
+
+If PAT was choosen, you can assign the value in .secrets.toml. 
+If DefaultAzureCredential was choosen, you can assigned the additional env vars like AZURE_CLIENT_SECRET directly, 
+or use managed identity/az cli (for local develpment) without any additional configuration.
+in any case, 'org' value must be assigned in .secrets.toml:
+```
+[azure_devops]
+org = "https://dev.azure.com/YOUR_ORGANIZATION/"
+# pat = "YOUR_PAT_TOKEN" needed only if using PAT for authentication
+```
+
+##### Azure DevOps Webhook
+To trigger from an Azure webhook, you need to manually [add a webhook](https://learn.microsoft.com/en-us/azure/devops/service-hooks/services/webhooks?view=azure-devops). 
+Use the "Pull request created" type to trigger a review, or "Pull request commented on" to trigger any supported comment with /<command> <args> comment on the relevant PR. Note that for the "Pull request commented on" trigger, only API v2.0 is supported.
+
+To control which commands will run automatically when a new PR is opened, you can set the `pr_commands` parameter in the configuration file, similar to the GitHub App:
+```
+[azure_devops_server]
+pr_commands = [
+    "/describe --pr_description.add_original_user_description=true --pr_description.keep_original_user_title=true",
+    "/review --pr_reviewer.num_code_suggestions=0",
+    "/improve",
+]
+```
+
+For webhook security, create a sporadic username/password pair and configure the webhook username and password on both the server and Azure DevOps webhook. These will be sent as basic Auth data by the webhook with each request:
+```
+[azure_devops_server]
+webhook_username = "<basic auth user>"
+webhook_password = "<basic auth password>"
+```
+> :warning: **Ensure that the webhook endpoint is only accessible over HTTPS** to mitigate the risk of credential interception when using basic authentication.
+
 
 ### Appendix - additional configurations walkthrough
 
@@ -425,19 +489,3 @@ patch_extra_lines=3
 
 Increasing this number provides more context to the model, but will also increase the token budget.
 If the PR is too large (see [PR Compression strategy](./PR_COMPRESSION.md)), PR-Agent automatically sets this number to 0, using the original git patch.
-
-
-#### Azure DevOps provider
-To use Azure DevOps provider use the following settings in configuration.toml:
-```
-[config]
-git_provider="azure"
-use_repo_settings_file=false
-```
-
-And use the following settings (you have to replace the values) in .secrets.toml:
-```
-[azure_devops]
-org = "https://dev.azure.com/YOUR_ORGANIZATION/"
-pat = "YOUR_PAT_TOKEN"
-```

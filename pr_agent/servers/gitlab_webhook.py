@@ -11,7 +11,9 @@ from starlette_context import context
 from starlette_context.middleware import RawContextMiddleware
 
 from pr_agent.agent.pr_agent import PRAgent
+from pr_agent.algo.utils import update_settings_from_args
 from pr_agent.config_loader import get_settings, global_settings
+from pr_agent.git_providers.utils import apply_repo_settings
 from pr_agent.log import LoggingFormat, get_logger, setup_logger
 from pr_agent.secret_providers import get_secret_provider
 
@@ -27,6 +29,23 @@ def handle_request(background_tasks: BackgroundTasks, url: str, body: str, log_c
     log_context["api_url"] = url
     with get_logger().contextualize(**log_context):
         background_tasks.add_task(PRAgent().handle_request, url, body)
+
+
+async def _perform_commands_gitlab(commands_conf: str, agent: PRAgent, api_url: str, log_context: dict):
+    apply_repo_settings(api_url)
+    commands = get_settings().get(f"gitlab.{commands_conf}", {})
+    for command in commands:
+        try:
+            split_command = command.split(" ")
+            command = split_command[0]
+            args = split_command[1:]
+            other_args = update_settings_from_args(args)
+            new_command = ' '.join([command] + other_args)
+            get_logger().info(f"Performing command: {new_command}")
+            with get_logger().contextualize(**log_context):
+                await agent.handle_request(api_url, new_command)
+        except Exception as e:
+            get_logger().error(f"Failed to perform command {command}: {e}")
 
 
 @router.post("/webhook")
@@ -58,13 +77,32 @@ async def gitlab_webhook(background_tasks: BackgroundTasks, request: Request):
     if data.get('object_kind') == 'merge_request' and data['object_attributes'].get('action') in ['open', 'reopen']:
         get_logger().info(f"A merge request has been opened: {data['object_attributes'].get('title')}")
         url = data['object_attributes'].get('url')
-        handle_request(background_tasks, url, "/review", log_context)
+        await _perform_commands_gitlab("pr_commands", PRAgent(), url, log_context)
+        # handle_request(background_tasks, url, "/review", log_context)
     elif data.get('object_kind') == 'note' and data['event_type'] == 'note':
         if 'merge_request' in data:
             mr = data['merge_request']
             url = mr.get('url')
             body = data.get('object_attributes', {}).get('note')
+            if data.get('object_attributes', {}).get('type') == 'DiffNote' and '/ask' in body:
+                line_range_ = data['object_attributes']['position']['line_range']
+
+                # if line_range_['start']['type'] == 'new':
+                start_line = line_range_['start']['new_line']
+                end_line = line_range_['end']['new_line']
+                # else:
+                #     start_line = line_range_['start']['old_line']
+                #     end_line = line_range_['end']['old_line']
+
+                question = body.replace('/ask', '').strip()
+                path = data['object_attributes']['position']['new_path']
+                side = 'RIGHT'# if line_range_['start']['type'] == 'new' else 'LEFT'
+                comment_id = data['object_attributes']["discussion_id"]
+                get_logger().info(f"Handling line comment")
+                body = f"/ask_line --line_start={start_line} --line_end={end_line} --side={side} --file_name={path} --comment_id={comment_id} {question}"
+
             handle_request(background_tasks, url, body, log_context)
+
     return JSONResponse(status_code=status.HTTP_200_OK, content=jsonable_encoder({"message": "success"}))
 
 

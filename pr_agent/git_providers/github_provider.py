@@ -34,8 +34,11 @@ class GithubProvider(GitProvider):
         self.incremental = incremental
         if pr_url and 'pull' in pr_url:
             self.set_pr(pr_url)
-            self.last_commit_id = list(self.pr.get_commits())[-1]
+            self.pr_commits = self.pr.get_commits()
+            self.last_commit_id = list(self.pr_commits)[-1]
             self.pr_url = self.get_pr_url() # pr_url for github actions can be as api.github.com, so we need to get the url from the pr object
+        else:
+            self.pr_commits = None
 
     def is_supported(self, capability: str) -> bool:
         return True
@@ -50,7 +53,8 @@ class GithubProvider(GitProvider):
             self.get_incremental_commits()
 
     def get_incremental_commits(self):
-        self.commits = list(self.pr.get_commits())
+        if not self.pr_commits:
+            self.pr_commits = list(self.pr.get_commits())
 
         self.previous_review = self.get_previous_review(full=True, incremental=True)
         if self.previous_review:
@@ -68,14 +72,14 @@ class GithubProvider(GitProvider):
     def get_commit_range(self):
         last_review_time = self.previous_review.created_at
         first_new_commit_index = None
-        for index in range(len(self.commits) - 1, -1, -1):
-            if self.commits[index].commit.author.date > last_review_time:
-                self.incremental.first_new_commit = self.commits[index]
+        for index in range(len(self.pr_commits) - 1, -1, -1):
+            if self.pr_commits[index].commit.author.date > last_review_time:
+                self.incremental.first_new_commit = self.pr_commits[index]
                 first_new_commit_index = index
             else:
-                self.incremental.last_seen_commit = self.commits[index]
+                self.incremental.last_seen_commit = self.pr_commits[index]
                 break
-        return self.commits[first_new_commit_index:] if first_new_commit_index is not None else []
+        return self.pr_commits[first_new_commit_index:] if first_new_commit_index is not None else []
 
     def get_previous_review(self, *, full: bool, incremental: bool):
         if not (full or incremental):
@@ -94,10 +98,18 @@ class GithubProvider(GitProvider):
     def get_files(self):
         if self.incremental.is_incremental and self.file_set:
             return self.file_set.values()
-        if not self.git_files:
-            # bring files from GitHub only once
+        try:
+            git_files = context.get("git_files", None)
+            if git_files:
+                return git_files
             self.git_files = self.pr.get_files()
-        return self.git_files
+            context["git_files"] = self.git_files
+            return self.git_files
+        except Exception:
+            if not self.git_files:
+                self.git_files = self.pr.get_files()
+            return self.git_files
+
 
     @retry(exceptions=RateLimitExceeded,
            tries=get_settings().github.ratelimit_retries, delay=2, backoff=2, jitter=(1, 3))
@@ -111,6 +123,13 @@ class GithubProvider(GitProvider):
             or renamed files in the merge request.
         """
         try:
+            try:
+                diff_files = context.get("diff_files", None)
+                if diff_files:
+                    return diff_files
+            except Exception:
+                pass
+
             if self.diff_files:
                 return self.diff_files
 
@@ -156,6 +175,11 @@ class GithubProvider(GitProvider):
                 diff_files.append(file_patch_canonical_structure)
 
             self.diff_files = diff_files
+            try:
+                context["diff_files"] = diff_files
+            except Exception:
+                pass
+
             return diff_files
 
         except GithubException.RateLimitExceededException as e:
@@ -384,6 +408,16 @@ class GithubProvider(GitProvider):
     def edit_comment(self, comment, body: str):
         comment.edit(body=body)
 
+    def reply_to_comment_from_comment_id(self, comment_id: int, body: str):
+        try:
+            # self.pr.get_issue_comment(comment_id).edit(body)
+            headers, data_patch = self.pr._requester.requestJsonAndCheck(
+                "POST", f"https://api.github.com/repos/{self.repo}/pulls/{self.pr_num}/comments/{comment_id}/replies",
+                input={"body": body}
+            )
+        except Exception as e:
+            get_logger().exception(f"Failed to reply comment, error: {e}")
+
     def remove_initial_comment(self):
         try:
             for comment in getattr(self.pr, 'comments_list', []):
@@ -442,22 +476,30 @@ class GithubProvider(GitProvider):
         except Exception:
             return ""
 
-    def add_eyes_reaction(self, issue_comment_id: int) -> Optional[int]:
+    def add_eyes_reaction(self, issue_comment_id: int, disable_eyes: bool = False) -> Optional[int]:
+        if disable_eyes:
+            return None
         try:
-            reaction = self.pr.get_issue_comment(issue_comment_id).create_reaction("eyes")
-            return reaction.id
+            headers, data_patch = self.pr._requester.requestJsonAndCheck(
+                "POST", f"https://api.github.com/repos/{self.repo}/issues/comments/{issue_comment_id}/reactions",
+                input={"content": "eyes"}
+            )
+            return data_patch.get("id", None)
         except Exception as e:
             get_logger().exception(f"Failed to add eyes reaction, error: {e}")
             return None
 
-    def remove_reaction(self, issue_comment_id: int, reaction_id: int) -> bool:
+    def remove_reaction(self, issue_comment_id: int, reaction_id: str) -> bool:
         try:
-            self.pr.get_issue_comment(issue_comment_id).delete_reaction(reaction_id)
+            # self.pr.get_issue_comment(issue_comment_id).delete_reaction(reaction_id)
+            headers, data_patch = self.pr._requester.requestJsonAndCheck(
+                "DELETE",
+                f"https://api.github.com/repos/{self.repo}/issues/comments/{issue_comment_id}/reactions/{reaction_id}"
+            )
             return True
         except Exception as e:
             get_logger().exception(f"Failed to remove eyes reaction, error: {e}")
             return False
-
 
     @staticmethod
     def _parse_pr_url(pr_url: str) -> Tuple[str, int]:

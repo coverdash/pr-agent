@@ -58,7 +58,8 @@ use_bullet_points=true
 extra_instructions = ""
 enable_pr_type=true
 final_update_message = true
-enable_help_text=true
+enable_help_text=false
+enable_help_comment=true
 ## changes walkthrough section
 enable_semantic_files_types=true
 collapsible_file_list='adaptive' # true, false, 'adaptive'
@@ -106,6 +107,14 @@ avoid_mocks=true       # if true, the generated tests will prefer to use real ob
 file = ""              # in case there are several components with the same name, you can specify the relevant file
 class_name = ""        # in case there are several methods with the same name in the same file, you can specify the relevant class name
 enable_help_text=true
+
+
+[checks] # /checks (pro feature) #
+enable_auto_checks_feedback=true
+excluded_checks_list=["lint"] # list of checks to exclude, for example: ["check1", "check2"]
+persistent_comment=true
+enable_help_text=true
+
 
 [pr_config] # /config #
 
@@ -162,17 +171,12 @@ push_commands = [
 ]
 
 [gitlab]
-# URL to the gitlab service
-url = "https://gitlab.com"
-
-# Polling (either project id or namespace/project_name) syntax can be used
-projects_to_monitor = ['org_name/repo_name']
-
-# Polling trigger
-magic_word = "AutoReview"
-
-# Polling interval
-polling_interval_seconds = 30
+url = "https://gitlab.com" # URL to the gitlab service
+pr_commands = [
+    "/describe --pr_description.add_original_user_description=true --pr_description.keep_original_user_title=true",
+    "/review --pr_reviewer.num_code_suggestions=0",
+    "/improve --pr_code_suggestions.summarize=true",
+]
 
 [bitbucket_app]
 #auto_review = true    # set as config var in .pr_agent.toml
