@@ -4,13 +4,15 @@ It can be invoked manually by commenting on any PR:
 ```
 /similar_issue
 ```
-For example:
 
-<kbd><img src=https://codium.ai/images/pr_agent/similar_issue_original_issue.png width="768"></kbd>
 
-<kbd><img src=https://codium.ai/images/pr_agent/similar_issue_comment.png width="768"></kbd>
+## Example usage
 
-<kbd><img src=https://codium.ai/images/pr_agent/similar_issue.png width="768"></kbd>
+![similar_issue_original_issue](https://codium.ai/images/pr_agent/similar_issue_original_issue.png){width=768}
+
+![similar_issue_comment](https://codium.ai/images/pr_agent/similar_issue_comment.png){width=768}
+
+![similar_issue](https://codium.ai/images/pr_agent/similar_issue.png){width=768}
 
 Note that to perform retrieval, the `similar_issue` tool indexes all the repo previous issues (once).
 
@@ -31,7 +33,7 @@ environment = "..."
 These parameters can be obtained by registering to [Pinecone](https://app.pinecone.io/?sessionType=signup/).
 
 
-## How to use:
+## How to use
 - To invoke the 'similar issue' tool from **CLI**, run:
 `python3 cli.py --issue_url=... similar_issue`
 
