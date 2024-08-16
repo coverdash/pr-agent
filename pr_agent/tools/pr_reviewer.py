@@ -287,7 +287,7 @@ class PRReviewer:
                 if comment:
                     comments.append(comment)
             else:
-                self.git_provider.publish_inline_comment(content, relevant_file, relevant_line_in_file)
+                self.git_provider.publish_inline_comment(content, relevant_file, relevant_line_in_file, suggestion)
 
         if comments:
             self.git_provider.publish_inline_comments(comments)
@@ -377,6 +377,11 @@ class PRReviewer:
     def set_review_labels(self, data):
         if not get_settings().config.publish_output:
             return
+
+        if not get_settings().pr_reviewer.require_estimate_effort_to_review:
+            get_settings().pr_reviewer.enable_review_labels_effort = False # we did not generate this output
+        if not get_settings().pr_reviewer.require_security_review:
+            get_settings().pr_reviewer.enable_review_labels_security = False # we did not generate this output
 
         if (get_settings().pr_reviewer.enable_review_labels_security or
                 get_settings().pr_reviewer.enable_review_labels_effort):

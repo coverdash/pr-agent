@@ -51,6 +51,7 @@ async def handle_request(api_url: str, body: str, log_context: dict, sender_id: 
     log_context["action"] = body
     log_context["event"] = "pull_request" if body == "/review" else "comment"
     log_context["api_url"] = api_url
+    log_context["app_name"] = get_settings().get("CONFIG.APP_NAME", "Unknown")
 
     with get_logger().contextualize(**log_context):
         await PRAgent().handle_request(api_url, body)
@@ -86,6 +87,10 @@ async def gitlab_webhook(background_tasks: BackgroundTasks, request: Request):
         if request.headers.get("X-Gitlab-Token") and secret_provider:
             request_token = request.headers.get("X-Gitlab-Token")
             secret = secret_provider.get_secret(request_token)
+            if not secret:
+                get_logger().warning(f"Empty secret retrieved, request_token: {request_token}")
+                return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                                    content=jsonable_encoder({"message": "unauthorized"}))
             try:
                 secret_dict = json.loads(secret)
                 gitlab_token = secret_dict["gitlab_token"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import copy
 import difflib
 import json
@@ -147,7 +148,7 @@ def convert_to_markdown_v2(output_data: dict,
             else:
                 markdown_text += f"### {emoji} {key_nice}: {value}\n\n"
         elif 'relevant tests' in key_nice.lower():
-            value = value.strip().lower()
+            value = str(value).strip().lower()
             if gfm_supported:
                 markdown_text += f"<tr><td>"
                 if is_value_no(value):
@@ -175,7 +176,7 @@ def convert_to_markdown_v2(output_data: dict,
                     markdown_text += f'### {emoji} No security concerns identified\n\n'
                 else:
                     markdown_text += f"### {emoji} Security concerns\n\n"
-                    value = emphasize_header(value.strip())
+                    value = emphasize_header(value.strip(), only_markdown=True)
                     markdown_text += f"{value}\n\n"
         elif 'can be split' in key_nice.lower():
             if gfm_supported:
@@ -561,8 +562,13 @@ def load_yaml(response_text: str, keys_fix_yaml: List[str] = [], first_key="", l
     try:
         data = yaml.safe_load(response_text)
     except Exception as e:
-        get_logger().error(f"Failed to parse AI prediction: {e}")
+        get_logger().warning(f"Initial failure to parse AI prediction: {e}")
         data = try_fix_yaml(response_text, keys_fix_yaml=keys_fix_yaml, first_key=first_key, last_key=last_key)
+        if not data:
+            get_logger().error(f"Failed to parse AI prediction after fallbacks", artifact={'response_text': response_text})
+        else:
+            get_logger().info(f"Successfully parsed AI prediction after fallbacks",
+                              artifact={'response_text': response_text})
     return data
 
 
@@ -674,14 +680,16 @@ def get_user_labels(current_labels: List[str] = None):
     Only keep labels that has been added by the user
     """
     try:
+        enable_custom_labels = get_settings().config.get('enable_custom_labels', False)
+        custom_labels = get_settings().get('custom_labels', [])
         if current_labels is None:
             current_labels = []
         user_labels = []
         for label in current_labels:
             if label.lower() in ['bug fix', 'tests', 'enhancement', 'documentation', 'other']:
                 continue
-            if get_settings().config.enable_custom_labels:
-                if label in get_settings().custom_labels:
+            if enable_custom_labels:
+                if label in custom_labels:
                     continue
             user_labels.append(label)
         if user_labels:
@@ -763,6 +771,7 @@ def replace_code_tags(text):
     """
     Replace odd instances of ` with <code> and even instances of ` with </code>
     """
+    text = html.escape(text)
     parts = text.split('`')
     for i in range(1, len(parts), 2):
         parts[i] = '<code>' + parts[i] + '</code>'
@@ -778,6 +787,9 @@ def find_line_number_of_relevant_line_in_file(diff_files: List[FilePatchInfo],
         absolute_position = -1
     re_hunk_header = re.compile(
         r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[ ]?(.*)")
+
+    if not diff_files:
+        return position, absolute_position
 
     for file in diff_files:
         if file.filename and (file.filename.strip() == relevant_file):

@@ -106,6 +106,10 @@ class LiteLLMAIHandler(BaseAiHandler):
             deployment_id = self.deployment_id
             if self.azure:
                 model = 'azure/' + model
+            if 'claude' in model and not system:
+                system = "\n"
+                get_logger().warning(
+                    "Empty system prompt for claude model. Adding a newline character to prevent OpenAI API error.")
             messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
             if img_path:
                 try:
@@ -147,13 +151,13 @@ class LiteLLMAIHandler(BaseAiHandler):
 
             response = await acompletion(**kwargs)
         except (openai.APIError, openai.APITimeoutError) as e:
-            get_logger().error("Error during OpenAI inference: ", e)
+            get_logger().warning("Error during OpenAI inference: ", e)
             raise
         except (openai.RateLimitError) as e:
             get_logger().error("Rate limit error during OpenAI inference: ", e)
             raise
         except (Exception) as e:
-            get_logger().error("Unknown error during OpenAI inference: ", e)
+            get_logger().warning("Unknown error during OpenAI inference: ", e)
             raise openai.APIError from e
         if response is None or len(response["choices"]) == 0:
             raise openai.APIError

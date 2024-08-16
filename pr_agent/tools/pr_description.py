@@ -92,7 +92,7 @@ class PRDescription:
             if self.prediction:
                 self._prepare_data()
             else:
-                get_logger().error(f"Error getting AI prediction {self.pr_id}")
+                get_logger().warning(f"Empty prediction, PR: {self.pr_id}")
                 self.git_provider.remove_initial_comment()
                 return None
 
@@ -508,8 +508,16 @@ extra_file_yaml =
 
     def _prepare_file_labels(self):
         file_label_dict = {}
+        if not self.data or 'pr_files' not in self.data:
+            return file_label_dict
         for file in self.data['pr_files']:
             try:
+                required_fields = ['changes_summary', 'changes_title', 'filename', 'label']
+                if not all(field in file for field in required_fields):
+                    # can happen for example if a YAML generation was interrupted in the middle (no more tokens)
+                    get_logger().warning(f"Missing required fields in file label dict {self.pr_id}, skipping file",
+                                         artifact={"file": file})
+                    continue
                 filename = file['filename'].replace("'", "`").replace('"', '`')
                 changes_summary = file['changes_summary']
                 changes_title = file['changes_title'].strip()

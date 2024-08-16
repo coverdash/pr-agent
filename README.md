@@ -43,6 +43,13 @@ CodiumAI PR-Agent aims to help efficiently review and handle pull requests, by p
   
 ## News and Updates
 
+### August 11, 2024
+Increased PR context size for improved results, and enabled [asymmetric context](https://github.com/Codium-ai/pr-agent/pull/1114/files#diff-9290a3ad9a86690b31f0450b77acd37ef1914b41fabc8a08682d4da433a77f90R69-R70)
+
+### August 10, 2024
+Added support for [Azure devops pipeline](https://pr-agent-docs.codium.ai/installation/azure/) - you can now easily run PR-Agent as an Azure devops pipeline, without needing to set up your own server.
+
+
 ### August 5, 2024
 Added support for [GitLab pipeline](https://pr-agent-docs.codium.ai/installation/gitlab/#run-as-a-gitlab-pipeline) - you can now run easily PR-Agent as a GitLab pipeline, without needing to set up your own server.
 
@@ -59,22 +66,6 @@ v0.23 has been released. See full log changes [here](https://github.com/Codium-a
 ### July 4, 2024
 
 Added improved support for claude-sonnet-3.5 model (anthropic, vertex, bedrock), including dedicated prompts.
-
-### June 17, 2024
-
-New option for a self-review checkbox is now available for the `/improve` tool, along with the ability(💎) to enable auto-approve, or demand self-review in addition to human reviewer. See more [here](https://pr-agent-docs.codium.ai/tools/improve/#self-review).
-
-<kbd><img src="https://www.codium.ai/images/pr_agent/self_review_1.png" width="512"></kbd>
-
-### June 6, 2024
-
-New option now available (💎) - **apply suggestions**:
-
-<kbd><img src="https://www.codium.ai/images/pr_agent/apply_suggestion_1.png" width="512"></kbd>
-
-&rarr;
-
-<kbd><img src="https://www.codium.ai/images/pr_agent/apply_suggestion_2.png" width="512"></kbd>
 
 
 
@@ -108,7 +99,7 @@ Supported commands per platform:
 | USAGE | CLI                                                                                                     | ✅ | ✅ | ✅ |      ✅       |
 |       | App / webhook                                                                                           | ✅ | ✅ | ✅ |      ✅       |
 |       | Tagging bot                                                                                             | ✅ |                    |                    |              |
-|       | Actions                                                                                                 | ✅ |                    | ✅ |              |
+|       | Actions                                                                                                 | ✅ |✅| ✅ |✅|
 |       |                                                                                                         |                    |                    |                    |              |
 | CORE  | PR compression                                                                                          | ✅ | ✅ | ✅ |      ✅       |
 |       | Repo language prioritization                                                                            | ✅ | ✅ | ✅ |      ✅       |
