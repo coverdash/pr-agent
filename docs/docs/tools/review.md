@@ -8,6 +8,9 @@ The tool can be triggered automatically every time a new PR is [opened](../usage
 
 Note that the main purpose of the `review` tool is to provide the **PR reviewer** with useful feedbacks and insights. The PR author, in contrast, may prefer to save time and focus on the output of the [improve](./improve.md) tool, which provides actionable code suggestions.
 
+(Read more about the different personas in the PR process and how Qodo Merge aims to assist them in our [blog](https://www.codium.ai/blog/understanding-the-challenges-and-pain-points-of-the-pull-request-cycle/))
+
+
 ## Example usage
 
 ### Manual triggering
@@ -27,7 +30,7 @@ If you want to edit [configurations](#configuration-options), add the relevant o
 
 ### Automatic triggering
 
-To run the `review` automatically when a PR is opened, define in a [configuration file](https://pr-agent-docs.codium.ai/usage-guide/configuration_options/#wiki-configuration-file):
+To run the `review` automatically when a PR is opened, define in a [configuration file](https://qodo-merge-docs.qodo.ai/usage-guide/configuration_options/#wiki-configuration-file):
 ```
 [github_app]
 pr_commands = [
@@ -46,7 +49,7 @@ num_code_suggestions = ...
 [//]: # ()
 [//]: # (### Incremental Mode)
 
-[//]: # (Incremental review only considers changes since the last PR-Agent review. This can be useful when working on the PR in an iterative manner, and you want to focus on the changes since the last review instead of reviewing the entire PR again.)
+[//]: # (Incremental review only considers changes since the last Qodo Merge review. This can be useful when working on the PR in an iterative manner, and you want to focus on the changes since the last review instead of reviewing the entire PR again.)
 
 [//]: # (For invoking the incremental mode, the following command can be used:)
 
@@ -92,11 +95,11 @@ num_code_suggestions = ...
 <table>
   <tr>
     <td><b>num_code_suggestions</b></td>
-    <td>Number of code suggestions provided by the 'review' tool. For manual comments, default is 4. For PR-Agent app auto tools, default is 0, meaning no code suggestions will be provided by the review tool, unless you manually edit pr_commands.</td>
+    <td>Number of code suggestions provided by the 'review' tool. Default is 0, meaning no code suggestions will be provided by the `review` tool.</td>
   </tr>
   <tr>
     <td><b>inline_code_comments</b></td>
-    <td>If set to true, the tool will publish the code suggestions as comments on the code diff. Default is false.</td>
+    <td>If set to true, the tool will publish the code suggestions as comments on the code diff. Default is false. Note that you need to set `num_code_suggestions`>0 to get code suggestions </td>
   </tr>
   <tr>
     <td><b>persistent_comment</b></td>
@@ -135,20 +138,9 @@ num_code_suggestions = ...
     <td><b>require_security_review</b></td>
     <td>If set to true, the tool will add a section that checks if the PR contains a possible security or vulnerability issue. Default is true.</td>
   </tr>
-</table>
-
-!!! example "SOC2 ticket compliance 💎"
-
-This sub-tool checks if the PR description properly contains a ticket to a project management system (e.g., Jira, Asana, Trello, etc.), as required by SOC2 compliance. If not, it will add a label to the PR: "Missing SOC2 ticket".
-    
-<table>
   <tr>
-    <td><b>require_soc2_ticket</b></td>
-    <td>If set to true, the SOC2 ticket checker sub-tool will be enabled. Default is false.</td>
-  </tr>
-  <tr>
-    <td><b>soc2_ticket_prompt</b></td>
-    <td>The prompt for the SOC2 ticket review. Default is: `Does the PR description include a link to ticket in a project management system (e.g., Jira, Asana, Trello, etc.) ?`. Edit this field if your compliance requirements are different.</td>
+    <td><b>require_ticket_analysis_review</b></td>
+    <td>If set to true, and the PR contains a GitHub ticket number, the tool will add a section that checks if the PR in fact fulfilled the ticket requirements. Default is true.</td>
   </tr>
 </table>
 
@@ -174,7 +166,7 @@ If enabled, the `review` tool can approve a PR when a specific comment, `/review
 <table>
   <tr>
     <td><b>enable_auto_approval</b></td>
-    <td>If set to true, the tool will approve the PR when invoked with the 'auto_approve' command. Default is false. This flag can be changed only from configuration file.</td>
+    <td>If set to true, the tool will approve the PR when invoked with the 'auto_approve' command. Default is false. This flag can be changed only from a configuration file.</td>
   </tr>
   <tr>
     <td><b>maximal_review_effort</b></td>
@@ -190,17 +182,17 @@ If enabled, the `review` tool can approve a PR when a specific comment, `/review
     It is recommended to review the [Configuration options](#configuration-options) section, and choose the relevant options for your use case.
     
     Some of the features that are disabled by default are quite useful, and should be considered for enabling. For example: 
-    `require_score_review`, `require_soc2_ticket`, and more.
+    `require_score_review`, and more.
     
     On the other hand, if you find one of the enabled features to be irrelevant for your use case, disable it. No default configuration can fit all use cases.
 
 !!! tip "Automation"
-    When you first install PR-Agent app, the [default mode](../usage-guide/automations_and_usage.md#github-app-automatic-tools-when-a-new-pr-is-opened) for the `review` tool is:
+    When you first install Qodo Merge app, the [default mode](../usage-guide/automations_and_usage.md#github-app-automatic-tools-when-a-new-pr-is-opened) for the `review` tool is:
     ```
     pr_commands = ["/review --pr_reviewer.num_code_suggestions=0", ...]
     ```
     Meaning the `review` tool will run automatically on every PR, without providing code suggestions.
-    Edit this field to enable/disable the tool, or to change the used configurations.
+    Edit this field to enable/disable the tool, or to change the configurations used.
 
 !!! tip "Possible labels from the review tool"
 
@@ -218,7 +210,7 @@ If enabled, the `review` tool can approve a PR when a specific comment, `/review
     
     Be specific, clear, and concise in the instructions. With extra instructions, you are the prompter. Specify the relevant sub-tool, and the relevant aspects of the PR that you want to emphasize.
     
-    Examples for extra instructions:
+    Examples of extra instructions:
     ```
     [pr_reviewer]
     extra_instructions="""\
@@ -234,7 +226,7 @@ If enabled, the `review` tool can approve a PR when a specific comment, `/review
 
 !!! tip "Auto-approval"
 
-    PR-Agent can approve a PR when a specific comment is invoked.
+    Qodo Merge can approve a PR when a specific comment is invoked.
     
     To ensure safety, the auto-approval feature is disabled by default. To enable auto-approval, you need to actively set in a pre-defined configuration file the following:
     ```
@@ -248,7 +240,7 @@ If enabled, the `review` tool can approve a PR when a specific comment, `/review
     ```
     /review auto_approve
     ```
-    PR-Agent will automatically approve the PR, and add a comment with the approval.
+    Qodo Merge will automatically approve the PR, and add a comment with the approval.
     
     
     You can also enable auto-approval only if the PR meets certain requirements, such as that the `estimated_review_effort` label is equal or below a certain threshold, by adjusting the flag:

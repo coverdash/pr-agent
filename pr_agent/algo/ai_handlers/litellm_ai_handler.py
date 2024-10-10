@@ -1,10 +1,10 @@
 import os
 import requests
-import boto3
 import litellm
 import openai
 from litellm import acompletion
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
+
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
@@ -44,6 +44,12 @@ class LiteLLMAIHandler(BaseAiHandler):
             litellm.use_client = True
         if get_settings().get("LITELLM.DROP_PARAMS", None):
             litellm.drop_params = get_settings().litellm.drop_params
+        if get_settings().get("LITELLM.SUCCESS_CALLBACK", None):
+            litellm.success_callback = get_settings().litellm.success_callback
+        if get_settings().get("LITELLM.FAILURE_CALLBACK", None):
+            litellm.failure_callback = get_settings().litellm.failure_callback
+        if get_settings().get("LITELLM.SERVICE_CALLBACK", None):
+            litellm.service_callback = get_settings().litellm.service_callback
         if get_settings().get("OPENAI.ORG", None):
             litellm.organization = get_settings().openai.org
         if get_settings().get("OPENAI.API_TYPE", None):
@@ -89,6 +95,60 @@ class LiteLLMAIHandler(BaseAiHandler):
             response_log['main_pr_language'] = 'unknown'
         return response_log
 
+    def add_litellm_callbacks(selfs, kwargs) -> dict:
+        captured_extra = []
+
+        def capture_logs(message):
+            # Parsing the log message and context
+            record = message.record
+            log_entry = {}
+            if record.get('extra', None).get('command', None) is not None:
+                log_entry.update({"command": record['extra']["command"]})
+            if record.get('extra', {}).get('pr_url', None) is not None:
+                log_entry.update({"pr_url": record['extra']["pr_url"]})
+
+            # Append the log entry to the captured_logs list
+            captured_extra.append(log_entry)
+
+        # Adding the custom sink to Loguru
+        handler_id = get_logger().add(capture_logs)
+        get_logger().debug("Capturing logs for litellm callbacks")
+        get_logger().remove(handler_id)
+
+        context = captured_extra[0] if len(captured_extra) > 0 else None
+
+        command = context.get("command", "unknown")
+        pr_url = context.get("pr_url", "unknown")
+        git_provider = get_settings().config.git_provider
+
+        metadata = dict()
+        callbacks = litellm.success_callback + litellm.failure_callback + litellm.service_callback
+        if "langfuse" in callbacks:
+            metadata.update({
+                "trace_name": command,
+                "tags": [git_provider, command],
+                "trace_metadata": {
+                    "command": command,
+                    "pr_url": pr_url,
+                },
+            })
+        if "langsmith" in callbacks:
+            metadata.update({
+                "run_name": command,
+                "tags": [git_provider, command],
+                "extra": {
+                    "metadata": {
+                        "command": command,
+                        "pr_url": pr_url,
+                    }
+                },
+            })
+
+        # Adding the captured logs to the kwargs
+        kwargs["metadata"] = metadata
+
+        return kwargs
+
     @property
     def deployment_id(self):
         """
@@ -107,10 +167,11 @@ class LiteLLMAIHandler(BaseAiHandler):
             if self.azure:
                 model = 'azure/' + model
             if 'claude' in model and not system:
-                system = "\n"
+                system = "No system prompt provided"
                 get_logger().warning(
                     "Empty system prompt for claude model. Adding a newline character to prevent OpenAI API error.")
             messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
             if img_path:
                 try:
                     # check if the image link is alive
@@ -125,14 +186,33 @@ class LiteLLMAIHandler(BaseAiHandler):
                 messages[1]["content"] = [{"type": "text", "text": messages[1]["content"]},
                                           {"type": "image_url", "image_url": {"url": img_path}}]
 
-            kwargs = {
-                "model": model,
-                "deployment_id": deployment_id,
-                "messages": messages,
-                "temperature": temperature,
-                "force_timeout": get_settings().config.ai_timeout,
-                "api_base": self.api_base,
-            }
+            # Currently O1 does not support separate system and user prompts
+            O1_MODEL_PREFIX = 'o1-'
+            if model.startswith(O1_MODEL_PREFIX):
+                user = f"{system}\n\n\n{user}"
+                system = ""
+                get_logger().info(f"Using O1 model, combining system and user prompts")
+                messages = [{"role": "user", "content": user}]
+                kwargs = {
+                    "model": model,
+                    "deployment_id": deployment_id,
+                    "messages": messages,
+                    "timeout": get_settings().config.ai_timeout,
+                    "api_base": self.api_base,
+                }
+            else:
+                kwargs = {
+                    "model": model,
+                    "deployment_id": deployment_id,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "timeout": get_settings().config.ai_timeout,
+                    "api_base": self.api_base,
+                }
+
+            if get_settings().litellm.get("enable_callbacks", False):
+                kwargs = self.add_litellm_callbacks(kwargs)
+
             seed = get_settings().config.get("seed", -1)
             if temperature > 0 and seed >= 0:
                 raise ValueError(f"Seed ({seed}) is not supported with temperature ({temperature}) > 0")
@@ -151,13 +231,13 @@ class LiteLLMAIHandler(BaseAiHandler):
 
             response = await acompletion(**kwargs)
         except (openai.APIError, openai.APITimeoutError) as e:
-            get_logger().warning("Error during OpenAI inference: ", e)
+            get_logger().warning(f"Error during LLM inference: {e}")
             raise
         except (openai.RateLimitError) as e:
-            get_logger().error("Rate limit error during OpenAI inference: ", e)
+            get_logger().error(f"Rate limit error during LLM inference: {e}")
             raise
         except (Exception) as e:
-            get_logger().warning("Unknown error during OpenAI inference: ", e)
+            get_logger().warning(f"Unknown error during LLM inference: {e}")
             raise openai.APIError from e
         if response is None or len(response["choices"]) == 0:
             raise openai.APIError

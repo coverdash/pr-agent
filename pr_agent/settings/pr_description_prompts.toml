@@ -48,7 +48,7 @@ class FileDescription(BaseModel):
 class PRDescription(BaseModel):
     type: List[PRType] = Field(description="one or more types that describe the PR content. Return the label member value (e.g. 'Bug fix', not 'bug_fix')")
 {%- if enable_semantic_files_types %}
-    pr_files: List[FileDescription] = Field(max_items=15, description="a list of the files in the PR, and their changes summary.")
+    pr_files: List[FileDescription] = Field(max_items=15, description="a list of the files in the PR, and summary of their changes")
 {%- endif %}
     description: str = Field(description="an informative and concise description of the PR. Use bullet points. Display first the most significant changes.")
     title: str = Field(description="an informative title for the PR, describing its main theme")
@@ -78,9 +78,9 @@ pr_files:
     ...
 ...
 {%- endif %}
-description: |-
+description: |
   ...
-title: |-
+title: |
   ...
 {%- if enable_custom_labels %}
 labels:
@@ -94,7 +94,26 @@ labels:
 Answer should be a valid YAML, and nothing else. Each YAML output MUST be after a newline, with proper indent, and block scalar indicator ('|')
 """
 
-user="""PR Info:
+user="""
+{%- if related_tickets %}
+Related Ticket Info:
+{% for ticket in related_tickets %}
+=====
+Ticket Title: '{{ ticket.title }}'
+{%- if ticket.labels %}
+Ticket Labels: {{ ticket.labels }}
+{%- endif %}
+{%- if ticket.body %}
+Ticket Description:
+#####
+{{ ticket.body }}
+#####
+{%- endif %}
+=====
+{% endfor %}
+{%- endif %}
+
+PR Info:
 
 Previous title: '{{title}}'
 

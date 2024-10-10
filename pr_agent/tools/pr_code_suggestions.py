@@ -7,7 +7,8 @@ from jinja2 import Environment, StrictUndefined
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
-from pr_agent.algo.pr_processing import get_pr_diff, get_pr_multi_diffs, retry_with_fallback_models
+from pr_agent.algo.pr_processing import get_pr_diff, get_pr_multi_diffs, retry_with_fallback_models, \
+    add_ai_metadata_to_diff_files
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import load_yaml, replace_code_tags, ModelType, show_relevant_configurations
 from pr_agent.config_loader import get_settings
@@ -43,32 +44,38 @@ class PRCodeSuggestions:
             self.is_extended = self._get_is_extended(args or [])
         except:
             self.is_extended = False
-        if self.is_extended:
-            num_code_suggestions = get_settings().pr_code_suggestions.num_code_suggestions_per_chunk
-        else:
-            num_code_suggestions = get_settings().pr_code_suggestions.num_code_suggestions
+        num_code_suggestions = get_settings().pr_code_suggestions.num_code_suggestions_per_chunk
+
 
         self.ai_handler = ai_handler()
         self.ai_handler.main_pr_language = self.main_language
         self.patches_diff = None
         self.prediction = None
+        self.pr_url = pr_url
         self.cli_mode = cli_mode
+        self.pr_description, self.pr_description_files = (
+            self.git_provider.get_pr_description(split_changes_walkthrough=True))
+        if (self.pr_description_files and get_settings().get("config.is_auto_command", False) and
+                get_settings().get("config.enable_ai_metadata", False)):
+            add_ai_metadata_to_diff_files(self.git_provider, self.pr_description_files)
+            get_logger().debug(f"AI metadata added to the this command")
+        else:
+            get_settings().set("config.enable_ai_metadata", False)
+            get_logger().debug(f"AI metadata is disabled for this command")
+
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
-            "description": self.git_provider.get_pr_description(),
+            "description": self.pr_description,
             "language": self.main_language,
             "diff": "",  # empty diff for initial calculation
             "num_code_suggestions": num_code_suggestions,
             "extra_instructions": get_settings().pr_code_suggestions.extra_instructions,
             "commit_messages_str": self.git_provider.get_commit_messages(),
             "relevant_best_practices": "",
+            "is_ai_metadata": get_settings().get("config.enable_ai_metadata", False),
         }
-        if 'claude' in get_settings().config.model:
-            # prompt for Claude, with minor adjustments
-            self.pr_code_suggestions_prompt_system = get_settings().pr_code_suggestions_prompt_claude.system
-        else:
-            self.pr_code_suggestions_prompt_system = get_settings().pr_code_suggestions_prompt.system
+        self.pr_code_suggestions_prompt_system = get_settings().pr_code_suggestions_prompt.system
 
         self.token_handler = TokenHandler(self.git_provider.pr,
                                           self.vars,
@@ -81,6 +88,10 @@ class PRCodeSuggestions:
 
     async def run(self):
         try:
+            if not self.git_provider.get_files():
+                get_logger().info(f"PR has no files: {self.pr_url}, skipping code suggestions")
+                return None
+
             get_logger().info('Generating code suggestions for PR...')
             relevant_configs = {'pr_code_suggestions': dict(get_settings().pr_code_suggestions),
                                 'config': dict(get_settings().config)}
@@ -99,7 +110,8 @@ class PRCodeSuggestions:
             if not data:
                 data = {"code_suggestions": []}
 
-            if data is None or 'code_suggestions' not in data or not data['code_suggestions']:
+            if (data is None or 'code_suggestions' not in data or not data['code_suggestions']
+                    and get_settings().config.publish_output):
                 get_logger().warning('No code suggestions found for the PR.')
                 pr_body = "## PR Code Suggestions ✨\n\nNo code suggestions found for the PR."
                 get_logger().debug(f"PR output", artifact=pr_body)
@@ -131,6 +143,9 @@ class PRCodeSuggestions:
                             pr_body += ' <!-- approve pr self-review -->'
 
                     # add usage guide
+                    if (get_settings().pr_code_suggestions.enable_chat_text and get_settings().config.is_auto_command
+                            and isinstance(self.git_provider, GithubProvider)):
+                        pr_body += "\n\n>💡 Need additional feedback ? start a [PR chat](https://chromewebstore.google.com/detail/ephlnjeghhogofkifjloamocljapahnl) \n\n"
                     if get_settings().pr_code_suggestions.enable_help_text:
                         pr_body += "<hr>\n\n<details> <summary><strong>💡 Tool usage guide:</strong></summary><hr> \n\n"
                         pr_body += HelpMessage.get_improve_usage_guide()
@@ -140,6 +155,7 @@ class PRCodeSuggestions:
                     if get_settings().get('config', {}).get('output_relevant_configurations', False):
                         pr_body += show_relevant_configurations(relevant_section='pr_code_suggestions')
 
+                    # publish the PR comment
                     if get_settings().pr_code_suggestions.persistent_comment:
                         final_update_message = False
                         self.publish_persistent_comment_with_history(pr_body,
@@ -155,20 +171,41 @@ class PRCodeSuggestions:
                         else:
                             self.git_provider.publish_comment(pr_body)
 
+                    # dual publishing mode
+                    if int(get_settings().pr_code_suggestions.dual_publishing_score_threshold) > 0:
+                        data_above_threshold = {'code_suggestions': []}
+                        try:
+                            for suggestion in data['code_suggestions']:
+                                if int(suggestion.get('score', 0)) >= int(get_settings().pr_code_suggestions.dual_publishing_score_threshold) \
+                                        and suggestion.get('improved_code'):
+                                    data_above_threshold['code_suggestions'].append(suggestion)
+                                    if not data_above_threshold['code_suggestions'][-1]['existing_code']:
+                                        get_logger().info(f'Identical existing and improved code for dual publishing found')
+                                        data_above_threshold['code_suggestions'][-1]['existing_code'] = suggestion[
+                                            'improved_code']
+                            if data_above_threshold['code_suggestions']:
+                                get_logger().info(
+                                    f"Publishing {len(data_above_threshold['code_suggestions'])} suggestions in dual publishing mode")
+                                self.push_inline_code_suggestions(data_above_threshold)
+                        except Exception as e:
+                            get_logger().error(f"Failed to publish dual publishing suggestions, error: {e}")
                 else:
                     self.push_inline_code_suggestions(data)
                     if self.progress_response:
-                        self.progress_response.delete()
+                        self.git_provider.remove_comment(self.progress_response)
+            else:
+                get_logger().info('Code suggestions generated for PR, but not published since publish_output is False.')
         except Exception as e:
             get_logger().error(f"Failed to generate code suggestions for PR, error: {e}")
-            if self.progress_response:
-                self.progress_response.delete()
-            else:
-                try:
-                    self.git_provider.remove_initial_comment()
-                    self.git_provider.publish_comment(f"Failed to generate code suggestions for PR")
-                except Exception as e:
-                    pass
+            if get_settings().config.publish_output:
+                if self.progress_response:
+                    self.progress_response.delete()
+                else:
+                    try:
+                        self.git_provider.remove_initial_comment()
+                        self.git_provider.publish_comment(f"Failed to generate code suggestions for PR")
+                    except Exception as e:
+                        pass
 
     def publish_persistent_comment_with_history(self, pr_comment: str,
                                                 initial_header: str,
@@ -177,6 +214,7 @@ class PRCodeSuggestions:
                                                 final_update_message=True,
                                                 max_previous_comments=4,
                                                 progress_response=None):
+
         if isinstance(self.git_provider, AzureDevopsProvider): # get_latest_commit_url is not supported yet
             if progress_response:
                 self.git_provider.edit_comment(progress_response, pr_comment)
@@ -256,7 +294,7 @@ class PRCodeSuggestions:
                         get_logger().info(f"Persistent mode - updating comment {comment_url} to latest {name} message")
                         if progress_response:  # publish to 'progress_response' comment, because it refreshes immediately
                             self.git_provider.edit_comment(progress_response, pr_comment_updated)
-                            self.git_provider.delete_comment(comment)
+                            self.git_provider.remove_comment(comment)
                         else:
                             self.git_provider.edit_comment(comment, pr_comment_updated)
                         return
@@ -361,12 +399,14 @@ class PRCodeSuggestions:
         one_sentence_summary_list = []
         for i, suggestion in enumerate(data['code_suggestions']):
             try:
-                needed_keys = ['one_sentence_summary', 'label', 'relevant_file', 'relevant_lines_start', 'relevant_lines_end']
+                needed_keys = ['one_sentence_summary', 'label', 'relevant_file', 'relevant_lines_start',
+                               'relevant_lines_end']
                 is_valid_keys = True
                 for key in needed_keys:
                     if key not in suggestion:
                         is_valid_keys = False
-                        get_logger().debug(f"Skipping suggestion {i + 1}, because it does not contain '{key}':\n'{suggestion}")
+                        get_logger().debug(
+                            f"Skipping suggestion {i + 1}, because it does not contain '{key}':\n'{suggestion}")
                         break
                 if not is_valid_keys:
                     continue
@@ -512,11 +552,11 @@ class PRCodeSuggestions:
             data = {"code_suggestions": []}
             for j, predictions in enumerate(prediction_list):  # each call adds an element to the list
                 if "code_suggestions" in predictions:
-                    score_threshold = max(1, get_settings().pr_code_suggestions.suggestions_score_threshold)
+                    score_threshold = max(1, int(get_settings().pr_code_suggestions.suggestions_score_threshold))
                     for i, prediction in enumerate(predictions["code_suggestions"]):
                         try:
                             if get_settings().pr_code_suggestions.self_reflect_on_suggestions:
-                                score = int(prediction["score"])
+                                score = int(prediction.get("score", 1))
                                 if score >= score_threshold:
                                     data["code_suggestions"].append(prediction)
                                 else:
@@ -529,7 +569,7 @@ class PRCodeSuggestions:
                             get_logger().error(f"Error getting PR diff for suggestion {i} in call {j}, error: {e}")
             self.data = data
         else:
-            get_logger().error(f"Error getting PR diff")
+            get_logger().warning(f"Empty PR diff list")
             self.data = data = None
         return data
 
@@ -577,7 +617,6 @@ class PRCodeSuggestions:
             if get_settings().pr_code_suggestions.final_clip_factor != 1:
                 max_len = max(
                     len(data_sorted),
-                    get_settings().pr_code_suggestions.num_code_suggestions,
                     get_settings().pr_code_suggestions.num_code_suggestions_per_chunk,
                 )
                 new_len = int(0.5 + max_len * get_settings().pr_code_suggestions.final_clip_factor)
@@ -598,13 +637,14 @@ class PRCodeSuggestions:
                 pr_body += "No suggestions found to improve this PR."
                 return pr_body
 
+            if get_settings().pr_code_suggestions.enable_intro_text and get_settings().config.is_auto_command:
+                pr_body += "Explore these optional code suggestions:\n\n"
+
             language_extension_map_org = get_settings().language_extension_map_org
             extension_to_language = {}
             for language, extensions in language_extension_map_org.items():
                 for ext in extensions:
                     extension_to_language[ext] = language
-
-            pr_body = "## PR Code Suggestions ✨\n\n"
 
             pr_body += "<table>"
             header = f"Suggestion"
@@ -666,7 +706,7 @@ class PRCodeSuggestions:
                     patch = "\n".join(patch_orig.splitlines()[5:]).strip('\n')
 
                     example_code = ""
-                    example_code += f"```diff\n{patch}\n```\n"
+                    example_code += f"```diff\n{patch.rstrip()}\n```\n"
                     if i == 0:
                         pr_body += f"""<td>\n\n"""
                     else:
@@ -722,7 +762,8 @@ class PRCodeSuggestions:
             variables = {'suggestion_list': suggestion_list,
                          'suggestion_str': suggestion_str,
                          "diff": patches_diff,
-                         'num_code_suggestions': len(suggestion_list)}
+                         'num_code_suggestions': len(suggestion_list),
+                         "is_ai_metadata": get_settings().get("config.enable_ai_metadata", False)}
             environment = Environment(undefined=StrictUndefined)
             system_prompt_reflect = environment.from_string(
                 get_settings().pr_code_suggestions_reflect_prompt.system).render(

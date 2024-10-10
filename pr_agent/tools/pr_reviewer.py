@@ -1,12 +1,13 @@
 import copy
 import datetime
+import traceback
 from collections import OrderedDict
 from functools import partial
 from typing import List, Tuple
 from jinja2 import Environment, StrictUndefined
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
-from pr_agent.algo.pr_processing import get_pr_diff, retry_with_fallback_models
+from pr_agent.algo.pr_processing import get_pr_diff, retry_with_fallback_models, add_ai_metadata_to_diff_files
 from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.utils import github_action_output, load_yaml, ModelType, \
     show_relevant_configurations, convert_to_markdown_v2, PRReviewHeader
@@ -15,6 +16,7 @@ from pr_agent.git_providers import get_git_provider, get_git_provider_with_conte
 from pr_agent.git_providers.git_provider import IncrementalPR, get_main_pr_language
 from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
+from pr_agent.tools.ticket_pr_compliance_check import extract_tickets, extract_and_cache_pr_tickets
 
 
 class PRReviewer:
@@ -51,15 +53,23 @@ class PRReviewer:
             raise Exception(f"Answer mode is not supported for {get_settings().config.git_provider} for now")
         self.ai_handler = ai_handler()
         self.ai_handler.main_pr_language = self.main_language
-
         self.patches_diff = None
         self.prediction = None
-
         answer_str, question_str = self._get_user_answers()
+        self.pr_description, self.pr_description_files = (
+            self.git_provider.get_pr_description(split_changes_walkthrough=True))
+        if (self.pr_description_files and get_settings().get("config.is_auto_command", False) and
+                get_settings().get("config.enable_ai_metadata", False)):
+            add_ai_metadata_to_diff_files(self.git_provider, self.pr_description_files)
+            get_logger().debug(f"AI metadata added to the this command")
+        else:
+            get_settings().set("config.enable_ai_metadata", False)
+            get_logger().debug(f"AI metadata is disabled for this command")
+
         self.vars = {
             "title": self.git_provider.pr.title,
             "branch": self.git_provider.get_pr_branch(),
-            "description": self.git_provider.get_pr_description(),
+            "description": self.pr_description,
             "language": self.main_language,
             "diff": "",  # empty diff for initial calculation
             "num_pr_files": self.git_provider.get_num_of_files(),
@@ -75,7 +85,8 @@ class PRReviewer:
             "commit_messages_str": self.git_provider.get_commit_messages(),
             "custom_labels": "",
             "enable_custom_labels": get_settings().config.enable_custom_labels,
-            "extra_issue_links": get_settings().pr_reviewer.extra_issue_links,
+            "is_ai_metadata":  get_settings().get("config.enable_ai_metadata", False),
+            "related_tickets": get_settings().get('related_tickets', []),
         }
 
         self.token_handler = TokenHandler(
@@ -96,6 +107,10 @@ class PRReviewer:
 
     async def run(self) -> None:
         try:
+            if not self.git_provider.get_files():
+                get_logger().info(f"PR has no files: {self.pr_url}, skipping review")
+                return None
+
             if self.incremental.is_incremental and not self._can_run_incremental_review():
                 return None
 
@@ -108,6 +123,9 @@ class PRReviewer:
             relevant_configs = {'pr_reviewer': dict(get_settings().pr_reviewer),
                                 'config': dict(get_settings().config)}
             get_logger().debug("Relevant configs", artifacts=relevant_configs)
+
+            # ticket extraction if exists
+            await extract_and_cache_pr_tickets(self.git_provider, self.vars)
 
             if self.incremental.is_incremental and hasattr(self.git_provider, "unreviewed_files_set") and not self.git_provider.unreviewed_files_set:
                 get_logger().info(f"Incremental review is enabled for {self.pr_url} but there are no new files")
@@ -152,13 +170,13 @@ class PRReviewer:
                                         self.token_handler,
                                         model,
                                         add_line_numbers_to_hunks=True,
-                                        disable_extra_lines=True,)
+                                        disable_extra_lines=False,)
 
         if self.patches_diff:
             get_logger().debug(f"PR diff", diff=self.patches_diff)
             self.prediction = await self._get_prediction(model)
         else:
-            get_logger().error(f"Error getting PR diff")
+            get_logger().warning(f"Empty diff for PR: {self.pr_url}")
             self.prediction = None
 
     async def _get_prediction(self, model: str) -> str:
@@ -195,7 +213,7 @@ class PRReviewer:
         first_key = 'review'
         last_key = 'security_concerns'
         data = load_yaml(self.prediction.strip(),
-                         keys_fix_yaml=["estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
+                         keys_fix_yaml=["ticket_compliance_check", "estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
                                         "relevant_file:", "relevant_line:", "suggestion:"],
                          first_key=first_key, last_key=last_key)
         github_action_output(data, 'review')
@@ -270,7 +288,7 @@ class PRReviewer:
         first_key = 'review'
         last_key = 'security_concerns'
         data = load_yaml(self.prediction.strip(),
-                         keys_fix_yaml=["estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
+                         keys_fix_yaml=["ticket_compliance_check", "estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
                                         "relevant_file:", "relevant_line:", "suggestion:"],
                          first_key=first_key, last_key=last_key)
         comments: List[str] = []
@@ -389,7 +407,16 @@ class PRReviewer:
                 review_labels = []
                 if get_settings().pr_reviewer.enable_review_labels_effort:
                     estimated_effort = data['review']['estimated_effort_to_review_[1-5]']
-                    estimated_effort_number = int(estimated_effort.split(',')[0])
+                    estimated_effort_number = 0
+                    if isinstance(estimated_effort, str):
+                        try:
+                            estimated_effort_number = int(estimated_effort.split(',')[0])
+                        except ValueError:
+                            get_logger().warning(f"Invalid estimated_effort value: {estimated_effort}")
+                    elif isinstance(estimated_effort, int):
+                        estimated_effort_number = estimated_effort
+                    else:
+                        get_logger().warning(f"Unexpected type for estimated_effort: {type(estimated_effort)}")
                     if 1 <= estimated_effort_number <= 5:  # 1, because ...
                         review_labels.append(f'Review effort [1-5]: {estimated_effort_number}')
                 if get_settings().pr_reviewer.enable_review_labels_security and get_settings().pr_reviewer.require_security_review:

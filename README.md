@@ -25,11 +25,11 @@ CodiumAI PR-Agent aims to help efficiently review and handle pull requests, by p
 </div>
 
 ### [Documentation](https://pr-agent-docs.codium.ai/)
-- See the [Installation Guide](https://pr-agent-docs.codium.ai/installation/) for instructions on installing PR-Agent on different platforms.
+- See the [Installation Guide](https://qodo-merge-docs.qodo.ai/installation/) for instructions on installing PR-Agent on different platforms.
 
-- See the [Usage Guide](https://pr-agent-docs.codium.ai/usage-guide/) for instructions on running PR-Agent tools via different interfaces, such as CLI, PR Comments, or by automatically triggering them when a new PR is opened.
+- See the [Usage Guide](https://qodo-merge-docs.qodo.ai/usage-guide/) for instructions on running PR-Agent tools via different interfaces, such as CLI, PR Comments, or by automatically triggering them when a new PR is opened.
 
-- See the [Tools Guide](https://pr-agent-docs.codium.ai/tools/) for a detailed description of the different tools, and the available configurations for each tool.
+- See the [Tools Guide](https://qodo-merge-docs.qodo.ai/tools/) for a detailed description of the different tools, and the available configurations for each tool.
 
 
 ## Table of Contents
@@ -37,11 +37,40 @@ CodiumAI PR-Agent aims to help efficiently review and handle pull requests, by p
 - [Overview](#overview)
 - [Example results](#example-results)
 - [Try it now](#try-it-now)
-- [PR-Agent Pro 💎](#pr-agent-pro-)
+- [PR-Agent Pro 💎](https://pr-agent-docs.codium.ai/overview/pr_agent_pro/)
 - [How it works](#how-it-works)
 - [Why use PR-Agent?](#why-use-pr-agent)
   
 ## News and Updates
+
+### October 10, 2024
+New ability for the `review` tool - **ticket compliance feedback**. If the PR contains a ticket number, PR-Agent will check if the PR code actually [complies](https://github.com/Codium-ai/pr-agent/pull/1279#issuecomment-2404042130) with the ticket requirements.
+
+<kbd><img src="https://github.com/user-attachments/assets/4a2a728b-5f47-40fa-80cc-16efd296938c" width="768"></kbd>
+
+
+### September 21, 2024
+Need help with PR-Agent? New feature - simply comment `/help "your question"` in a pull request, and PR-Agent will provide you with the [relevant documentation](https://github.com/Codium-ai/pr-agent/pull/1241#issuecomment-2365259334).
+
+<kbd><img src="https://www.codium.ai/images/pr_agent/pr_help_chat.png" width="768"></kbd>
+
+
+### September 12, 2024
+[Dynamic context](https://pr-agent-docs.codium.ai/core-abilities/dynamic_context/) is now the default option for context extension. 
+This feature enables PR-Agent to dynamically adjusting the relevant context for each code hunk, while avoiding overflowing the model with too much information.
+
+### September 3, 2024
+
+New version of PR-Agent, v0.24 was released. See the [release notes](https://github.com/Codium-ai/pr-agent/releases/tag/v0.24) for more information.
+
+### August 26, 2024
+
+New version of [PR Agent Chrome Extension](https://chromewebstore.google.com/detail/pr-agent-chrome-extension/ephlnjeghhogofkifjloamocljapahnl) was released, with full support of context-aware **PR Chat**. This novel feature is free to use for any open-source repository. See more details in [here](https://pr-agent-docs.codium.ai/chrome-extension/#pr-chat).
+
+<kbd><img src="https://www.codium.ai/images/pr_agent/pr_chat_1.png" width="768"></kbd>
+
+<kbd><img src="https://www.codium.ai/images/pr_agent/pr_chat_2.png" width="768"></kbd>
+
 
 ### August 11, 2024
 Increased PR context size for improved results, and enabled [asymmetric context](https://github.com/Codium-ai/pr-agent/pull/1114/files#diff-9290a3ad9a86690b31f0450b77acd37ef1914b41fabc8a08682d4da433a77f90R69-R70)
@@ -59,14 +88,6 @@ Added support for [GitLab pipeline](https://pr-agent-docs.codium.ai/installation
 
 (2) custom models are now [supported](https://pr-agent-docs.codium.ai/usage-guide/changing_a_model/#custom-models)
 
-### July 6, 2024
-
-v0.23 has been released. See full log changes [here](https://github.com/Codium-ai/pr-agent/releases/tag/v0.23).
-
-### July 4, 2024
-
-Added improved support for claude-sonnet-3.5 model (anthropic, vertex, bedrock), including dedicated prompts.
-
 
 
 ## Overview
@@ -78,7 +99,6 @@ Supported commands per platform:
 |-------|---------------------------------------------------------------------------------------------------------|:--------------------:|:--------------------:|:--------------------:|:------------:|
 | TOOLS | Review                                                                                                  | ✅ | ✅ | ✅ |      ✅       |
 |       | ⮑ Incremental                                                                                           | ✅ |                    |                    |              |
-|       | ⮑ [SOC2 Compliance](https://pr-agent-docs.codium.ai/tools/review/#soc2-ticket-compliance) 💎            | ✅ | ✅ | ✅ |              |
 |       | Describe                                                                                                | ✅ | ✅ | ✅ |      ✅       |
 |       | ⮑ [Inline File Summary](https://pr-agent-docs.codium.ai/tools/describe#inline-file-summary) 💎          | ✅ |                    |                    |              |
 |       | Improve                                                                                                 | ✅ | ✅ | ✅ |      ✅       |
@@ -229,9 +249,8 @@ For example, add a comment to any pull request with the following text:
 and the agent will respond with a review of your PR.
 
 Note that this is a promotional bot, suitable only for initial experimentation.
-It does not have `edit` access to you repo, for example, so it cannot update the PR description or add labels.
-Comment: `@CodiumAI-Agent /describe --pr_description.publish_description_as_comment=true` to publish the description as a comment in the PR.
-`@CodiumAI-Agent /review` and `@CodiumAI-Agent /improve` should work as-is.
+It does not have 'edit' access to your repo, for example, so it cannot update the PR description or add labels (`@CodiumAI-Agent /describe` will publish PR description as a comment). In addition, the bot cannot be used on private repositories, as it does not have access to the files there.
+
 
 ![Review generation process](https://www.codium.ai/images/demo-2.gif)
 
@@ -248,7 +267,7 @@ Note that when you set your own PR-Agent or use CodiumAI hosted PR-Agent, there 
 2. **Improved privacy** - No data will be stored or used to train models. PR-Agent Pro will employ zero data retention, and will use an OpenAI account with zero data retention.
 3. **Improved support** - PR-Agent Pro users will receive priority support, and will be able to request new features and capabilities.
 4. **Extra features** -In addition to the benefits listed above, PR-Agent Pro will emphasize more customization, and the usage of static code analysis, in addition to LLM logic, to improve results. 
-See [here](https://pr-agent-docs.codium.ai/#pr-agent-pro) for a list of features available in PR-Agent Pro.
+See [here](https://qodo-merge-docs.qodo.ai/overview/pr_agent_pro/) for a list of features available in PR-Agent Pro.
 
 
 
