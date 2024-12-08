@@ -15,7 +15,8 @@ from starlette_context.middleware import RawContextMiddleware
 from pr_agent.agent.pr_agent import PRAgent
 from pr_agent.algo.utils import update_settings_from_args
 from pr_agent.config_loader import get_settings, global_settings
-from pr_agent.git_providers import get_git_provider, get_git_provider_with_context
+from pr_agent.git_providers import (get_git_provider,
+                                    get_git_provider_with_context)
 from pr_agent.git_providers.git_provider import IncrementalPR
 from pr_agent.git_providers.utils import apply_repo_settings
 from pr_agent.identity_providers import get_identity_provider
@@ -373,6 +374,9 @@ def _check_pull_request_event(action: str, body: dict, log_context: dict) -> Tup
 async def _perform_auto_commands_github(commands_conf: str, agent: PRAgent, body: dict, api_url: str,
                                         log_context: dict):
     apply_repo_settings(api_url)
+    if commands_conf == "pr_commands" and get_settings().config.disable_auto_feedback:  # auto commands for PR, and auto feedback is disabled
+        get_logger().info(f"Auto feedback is disabled, skipping auto commands for PR {api_url=}")
+        return
     if not should_process_pr_logic(body): # Here we already updated the configuration with the repo settings
         return {}
     commands = get_settings().get(f"github_app.{commands_conf}")

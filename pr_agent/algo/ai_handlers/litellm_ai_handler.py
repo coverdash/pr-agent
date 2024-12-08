@@ -1,7 +1,8 @@
 import os
-import requests
+
 import litellm
 import openai
+import requests
 from litellm import acompletion
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
@@ -83,6 +84,11 @@ class LiteLLMAIHandler(BaseAiHandler):
             litellm.vertex_location = get_settings().get(
                 "VERTEXAI.VERTEX_LOCATION", None
             )
+        # Google AI Studio
+        # SEE https://docs.litellm.ai/docs/providers/gemini
+        if get_settings().get("GOOGLE_AI_STUDIO.GEMINI_API_KEY", None):
+          os.environ["GEMINI_API_KEY"] = get_settings().google_ai_studio.gemini_api_key
+
     def prepare_logs(self, response, system, user, resp, finish_reason):
         response_log = response.dict().copy()
         response_log['system'] = system

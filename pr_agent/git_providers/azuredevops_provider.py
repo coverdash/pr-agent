@@ -2,13 +2,16 @@ import os
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from ..algo.file_filter import filter_ignored
-from ..log import get_logger
-from ..algo.language_handler import is_valid_file
-from ..algo.utils import clip_tokens, find_line_number_of_relevant_line_in_file, load_large_diff, PRDescriptionHeader
-from ..config_loader import get_settings
-from .git_provider import GitProvider
 from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
+
+from ..algo.file_filter import filter_ignored
+from ..algo.language_handler import is_valid_file
+from ..algo.utils import (PRDescriptionHeader, clip_tokens,
+                          find_line_number_of_relevant_line_in_file,
+                          load_large_diff)
+from ..config_loader import get_settings
+from ..log import get_logger
+from .git_provider import GitProvider
 
 AZURE_DEVOPS_AVAILABLE = True
 ADO_APP_CLIENT_DEFAULT_ID = "499b84ac-1321-427f-aa17-267ca6975798/.default"
@@ -16,19 +19,16 @@ MAX_PR_DESCRIPTION_AZURE_LENGTH = 4000-1
 
 try:
     # noinspection PyUnresolvedReferences
-    from msrest.authentication import BasicAuthentication
     # noinspection PyUnresolvedReferences
     from azure.devops.connection import Connection
     # noinspection PyUnresolvedReferences
-    from azure.identity import DefaultAzureCredential
+    from azure.devops.v7_1.git.models import (Comment, CommentThread,
+                                              GitPullRequest,
+                                              GitPullRequestIterationChanges,
+                                              GitVersionDescriptor)
     # noinspection PyUnresolvedReferences
-    from azure.devops.v7_1.git.models import (
-        Comment,
-        CommentThread,
-        GitVersionDescriptor,
-        GitPullRequest,
-        GitPullRequestIterationChanges,
-    )
+    from azure.identity import DefaultAzureCredential
+    from msrest.authentication import BasicAuthentication
 except ImportError:
     AZURE_DEVOPS_AVAILABLE = False
 
@@ -67,16 +67,14 @@ class AzureDevopsProvider(GitProvider):
             relevant_lines_end = suggestion['relevant_lines_end']
 
             if not relevant_lines_start or relevant_lines_start == -1:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(
-                        f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}")
+                get_logger().warning(
+                    f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}")
                 continue
 
             if relevant_lines_end < relevant_lines_start:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(f"Failed to publish code suggestion, "
-                                           f"relevant_lines_end is {relevant_lines_end} and "
-                                           f"relevant_lines_start is {relevant_lines_start}")
+                get_logger().warning(f"Failed to publish code suggestion, "
+                                       f"relevant_lines_end is {relevant_lines_end} and "
+                                       f"relevant_lines_start is {relevant_lines_start}")
                 continue
 
             if relevant_lines_end > relevant_lines_start:
@@ -95,9 +93,11 @@ class AzureDevopsProvider(GitProvider):
                     "side": "RIGHT",
                 }
             post_parameters_list.append(post_parameters)
+        if not post_parameters_list:
+            return False
 
-        try:
-            for post_parameters in post_parameters_list:
+        for post_parameters in post_parameters_list:
+            try:
                 comment = Comment(content=post_parameters["body"], comment_type=1)
                 thread = CommentThread(comments=[comment],
                                        thread_context={
@@ -117,15 +117,11 @@ class AzureDevopsProvider(GitProvider):
                     repository_id=self.repo_slug,
                     pull_request_id=self.pr_num
                 )
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().info(
-                        f"Published code suggestion on {self.pr_num} at {post_parameters['path']}"
-                    )
-            return True
-        except Exception as e:
-            if get_settings().config.verbosity_level >= 2:
-                get_logger().error(f"Failed to publish code suggestion, error: {e}")
-            return False
+            except Exception as e:
+                get_logger().warning(f"Azure failed to publish code suggestion, error: {e}")
+        return True
+
+
 
     def get_pr_description_full(self) -> str:
         return self.pr.description
@@ -382,6 +378,9 @@ class AzureDevopsProvider(GitProvider):
             return []
 
     def publish_comment(self, pr_comment: str, is_temporary: bool = False, thread_context=None):
+        if is_temporary and not get_settings().config.publish_output_progress:
+            get_logger().debug(f"Skipping publish_comment for temporary comment: {pr_comment}")
+            return None
         comment = Comment(content=pr_comment)
         thread = CommentThread(comments=[comment], thread_context=thread_context, status=5)
         thread_response = self.azure_devops_client.create_thread(
@@ -404,7 +403,7 @@ class AzureDevopsProvider(GitProvider):
                 pr_body = pr_body[:ind]
 
             if len(pr_body) > MAX_PR_DESCRIPTION_AZURE_LENGTH:
-                changes_walkthrough_text = PRDescriptionHeader.CHANGES_WALKTHROUGH
+                changes_walkthrough_text = PRDescriptionHeader.CHANGES_WALKTHROUGH.value
                 ind = pr_body.find(changes_walkthrough_text)
                 if ind != -1:
                     pr_body = pr_body[:ind]
@@ -620,4 +619,3 @@ class AzureDevopsProvider(GitProvider):
 
     def publish_file_comments(self, file_comments: list) -> bool:
         pass
-
