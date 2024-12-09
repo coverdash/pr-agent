@@ -1,16 +1,21 @@
-from distutils.version import LooseVersion
-from requests.exceptions import HTTPError
+import difflib
+import re
+
+from packaging.version import parse as parse_version
 from typing import Optional, Tuple
 from urllib.parse import quote_plus, urlparse
 
 from atlassian.bitbucket import Bitbucket
+from requests.exceptions import HTTPError
 
-from .git_provider import GitProvider
-from ..algo.types import EDIT_TYPE, FilePatchInfo
+from ..algo.git_patch_processing import decode_if_bytes
 from ..algo.language_handler import is_valid_file
-from ..algo.utils import load_large_diff, find_line_number_of_relevant_line_in_file
+from ..algo.types import EDIT_TYPE, FilePatchInfo
+from ..algo.utils import (find_line_number_of_relevant_line_in_file,
+                          load_large_diff)
 from ..config_loader import get_settings
 from ..log import get_logger
+from .git_provider import GitProvider
 
 
 class BitbucketServerProvider(GitProvider):
@@ -35,7 +40,7 @@ class BitbucketServerProvider(GitProvider):
                                                               token=get_settings().get("BITBUCKET_SERVER.BEARER_TOKEN",
                                                                                        None))
         try:
-            self.bitbucket_api_version = LooseVersion(self.bitbucket_client.get("rest/api/1.0/application-properties").get('version'))
+            self.bitbucket_api_version = parse_version(self.bitbucket_client.get("rest/api/1.0/application-properties").get('version'))
         except Exception:
             self.bitbucket_api_version = None
 
@@ -65,24 +70,37 @@ class BitbucketServerProvider(GitProvider):
         post_parameters_list = []
         for suggestion in code_suggestions:
             body = suggestion["body"]
+            original_suggestion = suggestion.get('original_suggestion', None)  # needed for diff code
+            if original_suggestion:
+                try:
+                    existing_code = original_suggestion['existing_code'].rstrip() + "\n"
+                    improved_code = original_suggestion['improved_code'].rstrip() + "\n"
+                    diff = difflib.unified_diff(existing_code.split('\n'),
+                                                improved_code.split('\n'), n=999)
+                    patch_orig = "\n".join(diff)
+                    patch = "\n".join(patch_orig.splitlines()[5:]).strip('\n')
+                    diff_code = f"\n\n```diff\n{patch.rstrip()}\n```"
+                    # replace ```suggestion ... ``` with diff_code, using regex:
+                    body = re.sub(r'```suggestion.*?```', diff_code, body, flags=re.DOTALL)
+                except Exception as e:
+                    get_logger().exception(f"Bitbucket failed to get diff code for publishing, error: {e}")
+                    continue
             relevant_file = suggestion["relevant_file"]
             relevant_lines_start = suggestion["relevant_lines_start"]
             relevant_lines_end = suggestion["relevant_lines_end"]
 
             if not relevant_lines_start or relevant_lines_start == -1:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(
-                        f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}"
-                    )
+                get_logger().warning(
+                    f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}"
+                )
                 continue
 
             if relevant_lines_end < relevant_lines_start:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(
-                        f"Failed to publish code suggestion, "
-                        f"relevant_lines_end is {relevant_lines_end} and "
-                        f"relevant_lines_start is {relevant_lines_start}"
-                    )
+                get_logger().warning(
+                    f"Failed to publish code suggestion, "
+                    f"relevant_lines_end is {relevant_lines_end} and "
+                    f"relevant_lines_start is {relevant_lines_start}"
+                )
                 continue
 
             if relevant_lines_end > relevant_lines_start:
@@ -159,7 +177,7 @@ class BitbucketServerProvider(GitProvider):
         head_sha = self.pr.fromRef['latestCommit']
 
         # if Bitbucket api version is >= 8.16 then use the merge-base api for 2-way diff calculation
-        if self.bitbucket_api_version is not None and self.bitbucket_api_version >= LooseVersion("8.16"):
+        if self.bitbucket_api_version is not None and self.bitbucket_api_version >= parse_version("8.16"):
             try:
                 base_sha = self.bitbucket_client.get(self._get_merge_base())['id']
             except Exception as e:
@@ -174,7 +192,7 @@ class BitbucketServerProvider(GitProvider):
             # if Bitbucket api version is None or < 7.0 then do a simple diff with a guaranteed common ancestor
             base_sha = source_commits_list[-1]['parents'][0]['id']
             # if Bitbucket api version is 7.0-8.15 then use 2-way diff functionality for the base_sha
-            if self.bitbucket_api_version is not None and self.bitbucket_api_version >= LooseVersion("7.0"):
+            if self.bitbucket_api_version is not None and self.bitbucket_api_version >= parse_version("7.0"):
                 try:
                     destination_commits = list(
                         self.bitbucket_client.get_commits(self.workspace_slug, self.repo_slug, base_sha,
@@ -200,25 +218,21 @@ class BitbucketServerProvider(GitProvider):
                 case 'ADD':
                     edit_type = EDIT_TYPE.ADDED
                     new_file_content_str = self.get_file(file_path, head_sha)
-                    if isinstance(new_file_content_str, (bytes, bytearray)):
-                        new_file_content_str = new_file_content_str.decode("utf-8")
+                    new_file_content_str = decode_if_bytes(new_file_content_str)
                     original_file_content_str = ""
                 case 'DELETE':
                     edit_type = EDIT_TYPE.DELETED
                     new_file_content_str = ""
                     original_file_content_str = self.get_file(file_path, base_sha)
-                    if isinstance(original_file_content_str, (bytes, bytearray)):
-                        original_file_content_str = original_file_content_str.decode("utf-8")
+                    original_file_content_str = decode_if_bytes(original_file_content_str)
                 case 'RENAME':
                     edit_type = EDIT_TYPE.RENAMED
                 case _:
                     edit_type = EDIT_TYPE.MODIFIED
                     original_file_content_str = self.get_file(file_path, base_sha)
-                    if isinstance(original_file_content_str, (bytes, bytearray)):
-                        original_file_content_str = original_file_content_str.decode("utf-8")
+                    original_file_content_str = decode_if_bytes(original_file_content_str)
                     new_file_content_str = self.get_file(file_path, head_sha)
-                    if isinstance(new_file_content_str, (bytes, bytearray)):
-                        new_file_content_str = new_file_content_str.decode("utf-8")
+                    new_file_content_str = decode_if_bytes(new_file_content_str)
 
             patch = load_large_diff(file_path, new_file_content_str, original_file_content_str)
 
@@ -329,10 +343,10 @@ class BitbucketServerProvider(GitProvider):
         for comment in comments:
             if 'position' in comment:
                 self.publish_inline_comment(comment['body'], comment['position'], comment['path'])
-            elif 'start_line' in comment:  # multi-line comment
+            elif 'start_line' in comment: # multi-line comment
                 # note that bitbucket does not seem to support range - only a comment on a single line - https://community.developer.atlassian.com/t/api-post-endpoint-for-inline-pull-request-comments/60452
                 self.publish_inline_comment(comment['body'], comment['start_line'], comment['path'])
-            elif 'line' in comment:  # single-line comment
+            elif 'line' in comment: # single-line comment
                 self.publish_inline_comment(comment['body'], comment['line'], comment['path'])
             else:
                 get_logger().error(f"Could not publish inline comment: {comment}")
