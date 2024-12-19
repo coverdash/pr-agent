@@ -1,3 +1,4 @@
+import difflib
 import hashlib
 import re
 from typing import Optional, Tuple
@@ -7,13 +8,16 @@ import gitlab
 import requests
 from gitlab import GitlabGetError
 
+from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
+
 from ..algo.file_filter import filter_ignored
 from ..algo.language_handler import is_valid_file
-from ..algo.utils import load_large_diff, clip_tokens, find_line_number_of_relevant_line_in_file
+from ..algo.utils import (clip_tokens,
+                          find_line_number_of_relevant_line_in_file,
+                          load_large_diff)
 from ..config_loader import get_settings
-from .git_provider import GitProvider, MAX_FILES_ALLOWED_FULL
-from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 from ..log import get_logger
+from .git_provider import MAX_FILES_ALLOWED_FULL, GitProvider
 
 
 class DiffNotFoundError(Exception):
@@ -190,6 +194,9 @@ class GitLabProvider(GitProvider):
         self.publish_persistent_comment_full(pr_comment, initial_header, update_header, name, final_update_message)
 
     def publish_comment(self, mr_comment: str, is_temporary: bool = False):
+        if is_temporary and not get_settings().config.publish_output_progress:
+            get_logger().debug(f"Skipping publish_comment for temporary comment: {mr_comment}")
+            return None
         mr_comment = self.limit_output_characters(mr_comment, self.max_comment_chars)
         comment = self.mr.notes.create({'body': mr_comment})
         if is_temporary:
@@ -275,20 +282,23 @@ class GitLabProvider(GitProvider):
                         new_code_snippet = original_suggestion['improved_code']
                         content = original_suggestion['suggestion_content']
                         label = original_suggestion['label']
-                        if 'score' in original_suggestion:
-                            score = original_suggestion['score']
-                        else:
-                            score = 7
+                        score = original_suggestion.get('score', 7)
 
                     if hasattr(self, 'main_language'):
                         language = self.main_language
                     else:
                         language = ''
                     link = self.get_line_link(relevant_file, line_start, line_end)
-                    body_fallback =f"**Suggestion:** {content} [{label}, importance: {score}]\n___\n"
-                    body_fallback +=f"\n\nReplace  lines ([{line_start}-{line_end}]({link}))\n\n```{language}\n{old_code_snippet}\n````\n\n"
-                    body_fallback +=f"with\n\n```{language}\n{new_code_snippet}\n````"
-                    body_fallback += f"\n\n___\n\n`(Cannot implement this suggestion directly, as gitlab API does not enable committing to a non -+ line in a PR)`"
+                    body_fallback =f"**Suggestion:** {content} [{label}, importance: {score}]\n\n"
+                    body_fallback +=f"\n\n<details><summary>[{target_file.filename} [{line_start}-{line_end}]]({link}):</summary>\n\n"
+                    body_fallback += f"\n\n___\n\n`(Cannot implement directly - GitLab API allows committable suggestions strictly on MR diff lines)`"
+                    body_fallback+="</details>\n\n"
+                    diff_patch = difflib.unified_diff(old_code_snippet.split('\n'),
+                                                new_code_snippet.split('\n'), n=999)
+                    patch_orig = "\n".join(diff_patch)
+                    patch = "\n".join(patch_orig.splitlines()[5:]).strip('\n')
+                    diff_code = f"\n\n```diff\n{patch.rstrip()}\n```"
+                    body_fallback += diff_code
 
                     # Create a general note on the file in the MR
                     self.mr.notes.create({
@@ -301,6 +311,7 @@ class GitLabProvider(GitProvider):
                             'file_path': f'{target_file.filename}',
                         }
                     })
+                    get_logger().debug(f"Created fallback comment in MR {self.id_mr} with position {pos_obj}")
 
                     # get_logger().debug(
                     #     f"Failed to create comment in MR {self.id_mr} with position {pos_obj} (probably not a '+' line)")

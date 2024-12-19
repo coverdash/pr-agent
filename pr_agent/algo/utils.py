@@ -7,13 +7,14 @@ import html
 import json
 import os
 import re
+import sys
 import textwrap
 import time
 import traceback
 from datetime import datetime
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, List, Tuple
-
 
 import html2text
 import requests
@@ -23,9 +24,16 @@ from starlette_context import context
 
 from pr_agent.algo import MAX_TOKENS
 from pr_agent.algo.token_handler import TokenEncoder
-from pr_agent.config_loader import get_settings, global_settings
 from pr_agent.algo.types import FilePatchInfo
+from pr_agent.config_loader import get_settings, global_settings
 from pr_agent.log import get_logger
+
+
+def get_weak_model() -> str:
+    if get_settings().get("config.model_weak"):
+        return get_settings().config.model_weak
+    return get_settings().config.model
+
 
 class Range(BaseModel):
     line_start: int  # should be 0-indexed
@@ -35,8 +43,7 @@ class Range(BaseModel):
 
 class ModelType(str, Enum):
     REGULAR = "regular"
-    TURBO = "turbo"
-
+    WEAK = "weak"
 
 class PRReviewHeader(str, Enum):
     REGULAR = "## PR Reviewer Guide"
@@ -173,7 +180,7 @@ def convert_to_markdown_v2(output_data: dict,
                 if is_value_no(value):
                     markdown_text += f'### {emoji} No relevant tests\n\n'
                 else:
-                    markdown_text += f"### PR contains tests\n\n"
+                    markdown_text += f"### {emoji} PR contains tests\n\n"
         elif 'ticket compliance check' in key_nice.lower():
             markdown_text = ticket_markdown_logic(emoji, markdown_text, value, gfm_supported)
         elif 'security concerns' in key_nice.lower():
@@ -224,12 +231,21 @@ def convert_to_markdown_v2(output_data: dict,
                         issue_content = issue.get('issue_content', '').strip()
                         start_line = int(str(issue.get('start_line', 0)).strip())
                         end_line = int(str(issue.get('end_line', 0)).strip())
-                        reference_link = git_provider.get_line_link(relevant_file, start_line, end_line)
+                        if git_provider:
+                            reference_link = git_provider.get_line_link(relevant_file, start_line, end_line)
+                        else:
+                            reference_link = None
 
                         if gfm_supported:
-                            issue_str = f"<a href='{reference_link}'><strong>{issue_header}</strong></a><br>{issue_content}"
+                            if reference_link is not None and len(reference_link) > 0:
+                                issue_str = f"<a href='{reference_link}'><strong>{issue_header}</strong></a><br>{issue_content}"
+                            else:
+                                issue_str = f"<strong>{issue_header}</strong><br>{issue_content}"
                         else:
-                            issue_str = f"[**{issue_header}**]({reference_link})\n\n{issue_content}\n\n"
+                            if reference_link is not None and len(reference_link) > 0:
+                                issue_str = f"[**{issue_header}**]({reference_link})\n\n{issue_content}\n\n"
+                            else:
+                                issue_str = f"**{issue_header}**\n\n{issue_content}\n\n"
                         markdown_text += f"{issue_str}\n\n"
                     except Exception as e:
                         get_logger().exception(f"Failed to process 'Recommended focus areas for review': {e}")
@@ -1028,7 +1044,7 @@ def process_description(description_full: str) -> Tuple[str, List]:
     if not description_full:
         return "", []
 
-    description_split = description_full.split(PRDescriptionHeader.CHANGES_WALKTHROUGH)
+    description_split = description_full.split(PRDescriptionHeader.CHANGES_WALKTHROUGH.value)
     base_description_str = description_split[0]
     changes_walkthrough_str = ""
     files = []
@@ -1097,3 +1113,24 @@ def process_description(description_full: str) -> Tuple[str, List]:
         get_logger().exception(f"Failed to process description: {e}")
 
     return base_description_str, files
+
+def get_version() -> str:
+    # First check pyproject.toml if running directly out of repository
+    if os.path.exists("pyproject.toml"):
+        if sys.version_info >= (3, 11):
+            import tomllib
+            with open("pyproject.toml", "rb") as f:
+                data = tomllib.load(f)
+                if "project" in data and "version" in data["project"]:
+                    return data["project"]["version"]
+                else:
+                    get_logger().warning("Version not found in pyproject.toml")
+        else:
+            get_logger().warning("Unable to determine local version from pyproject.toml")
+
+    # Otherwise get the installed pip package version
+    try:
+        return version('pr-agent')
+    except PackageNotFoundError:
+        get_logger().warning("Unable to find package named 'pr-agent'")
+        return "unknown"

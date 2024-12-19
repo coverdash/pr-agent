@@ -4,19 +4,27 @@ import traceback
 from collections import OrderedDict
 from functools import partial
 from typing import List, Tuple
+
 from jinja2 import Environment, StrictUndefined
+
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
-from pr_agent.algo.pr_processing import get_pr_diff, retry_with_fallback_models, add_ai_metadata_to_diff_files
+from pr_agent.algo.pr_processing import (add_ai_metadata_to_diff_files,
+                                         get_pr_diff,
+                                         retry_with_fallback_models)
 from pr_agent.algo.token_handler import TokenHandler
-from pr_agent.algo.utils import github_action_output, load_yaml, ModelType, \
-    show_relevant_configurations, convert_to_markdown_v2, PRReviewHeader
+from pr_agent.algo.utils import (ModelType, PRReviewHeader,
+                                 convert_to_markdown_v2, github_action_output,
+                                 load_yaml, show_relevant_configurations)
 from pr_agent.config_loader import get_settings
-from pr_agent.git_providers import get_git_provider, get_git_provider_with_context
-from pr_agent.git_providers.git_provider import IncrementalPR, get_main_pr_language
+from pr_agent.git_providers import (get_git_provider,
+                                    get_git_provider_with_context)
+from pr_agent.git_providers.git_provider import (IncrementalPR,
+                                                 get_main_pr_language)
 from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
-from pr_agent.tools.ticket_pr_compliance_check import extract_tickets, extract_and_cache_pr_tickets
+from pr_agent.tools.ticket_pr_compliance_check import (
+    extract_and_cache_pr_tickets, extract_tickets)
 
 
 class PRReviewer:
@@ -140,7 +148,7 @@ class PRReviewer:
             if get_settings().config.publish_output and not get_settings().config.get('is_auto_command', False):
                 self.git_provider.publish_comment("Preparing review...", is_temporary=True)
 
-            await retry_with_fallback_models(self._prepare_prediction)
+            await retry_with_fallback_models(self._prepare_prediction, model_type=ModelType.REGULAR)
             if not self.prediction:
                 self.git_provider.remove_initial_comment()
                 return None
@@ -162,6 +170,10 @@ class PRReviewer:
                 self.git_provider.remove_initial_comment()
                 if get_settings().pr_reviewer.inline_code_comments:
                     self._publish_inline_code_comments()
+            else:
+                get_logger().info("Review output is not published")
+                get_settings().data = {"artifact": pr_review}
+                return
         except Exception as e:
             get_logger().error(f"Failed to review PR: {e}")
 

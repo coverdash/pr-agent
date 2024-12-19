@@ -5,14 +5,15 @@ from typing import Callable, List, Tuple
 
 from github import RateLimitExceededException
 
-from pr_agent.algo.git_patch_processing import convert_to_hunks_with_lines_numbers, extend_patch, handle_patch_deletions
-from pr_agent.algo.language_handler import sort_files_by_main_languages
 from pr_agent.algo.file_filter import filter_ignored
+from pr_agent.algo.git_patch_processing import (
+    convert_to_hunks_with_lines_numbers, extend_patch, handle_patch_deletions)
+from pr_agent.algo.language_handler import sort_files_by_main_languages
 from pr_agent.algo.token_handler import TokenHandler
-from pr_agent.algo.utils import get_max_tokens, clip_tokens, ModelType
+from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
+from pr_agent.algo.utils import ModelType, clip_tokens, get_max_tokens, get_weak_model
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers.git_provider import GitProvider
-from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 from pr_agent.log import get_logger
 
 DELETED_FILES_ = "Deleted files:\n"
@@ -353,8 +354,8 @@ async def retry_with_fallback_models(f: Callable, model_type: ModelType = ModelT
 
 
 def _get_all_models(model_type: ModelType = ModelType.REGULAR) -> List[str]:
-    if model_type == ModelType.TURBO:
-        model = get_settings().config.model_turbo
+    if model_type == ModelType.WEAK:
+        model = get_weak_model()
     else:
         model = get_settings().config.model
     fallback_models = get_settings().config.fallback_models

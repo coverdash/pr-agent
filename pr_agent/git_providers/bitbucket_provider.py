@@ -1,4 +1,6 @@
+import difflib
 import json
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
@@ -6,13 +8,14 @@ import requests
 from atlassian.bitbucket import Cloud
 from starlette_context import context
 
-from pr_agent.algo.types import FilePatchInfo, EDIT_TYPE
+from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
+
 from ..algo.file_filter import filter_ignored
 from ..algo.language_handler import is_valid_file
 from ..algo.utils import find_line_number_of_relevant_line_in_file
 from ..config_loader import get_settings
 from ..log import get_logger
-from .git_provider import GitProvider, MAX_FILES_ALLOWED_FULL
+from .git_provider import MAX_FILES_ALLOWED_FULL, GitProvider
 
 
 def _gef_filename(diff):
@@ -71,24 +74,38 @@ class BitbucketProvider(GitProvider):
         post_parameters_list = []
         for suggestion in code_suggestions:
             body = suggestion["body"]
+            original_suggestion = suggestion.get('original_suggestion', None)  # needed for diff code
+            if original_suggestion:
+                try:
+                    existing_code = original_suggestion['existing_code'].rstrip() + "\n"
+                    improved_code = original_suggestion['improved_code'].rstrip() + "\n"
+                    diff = difflib.unified_diff(existing_code.split('\n'),
+                                                improved_code.split('\n'), n=999)
+                    patch_orig = "\n".join(diff)
+                    patch = "\n".join(patch_orig.splitlines()[5:]).strip('\n')
+                    diff_code = f"\n\n```diff\n{patch.rstrip()}\n```"
+                    # replace ```suggestion ... ``` with diff_code, using regex:
+                    body = re.sub(r'```suggestion.*?```', diff_code, body, flags=re.DOTALL)
+                except Exception as e:
+                    get_logger().exception(f"Bitbucket failed to get diff code for publishing, error: {e}")
+                    continue
+
             relevant_file = suggestion["relevant_file"]
             relevant_lines_start = suggestion["relevant_lines_start"]
             relevant_lines_end = suggestion["relevant_lines_end"]
 
             if not relevant_lines_start or relevant_lines_start == -1:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(
-                        f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}"
-                    )
+                get_logger().exception(
+                    f"Failed to publish code suggestion, relevant_lines_start is {relevant_lines_start}"
+                )
                 continue
 
             if relevant_lines_end < relevant_lines_start:
-                if get_settings().config.verbosity_level >= 2:
-                    get_logger().exception(
-                        f"Failed to publish code suggestion, "
-                        f"relevant_lines_end is {relevant_lines_end} and "
-                        f"relevant_lines_start is {relevant_lines_start}"
-                    )
+                get_logger().exception(
+                    f"Failed to publish code suggestion, "
+                    f"relevant_lines_end is {relevant_lines_end} and "
+                    f"relevant_lines_start is {relevant_lines_start}"
+                )
                 continue
 
             if relevant_lines_end > relevant_lines_start:
@@ -112,8 +129,7 @@ class BitbucketProvider(GitProvider):
             self.publish_inline_comments(post_parameters_list)
             return True
         except Exception as e:
-            if get_settings().config.verbosity_level >= 2:
-                get_logger().error(f"Failed to publish code suggestion, error: {e}")
+            get_logger().error(f"Bitbucket failed to publish code suggestion, error: {e}")
             return False
 
     def publish_file_comments(self, file_comments: list) -> bool:
@@ -121,7 +137,7 @@ class BitbucketProvider(GitProvider):
 
     def is_supported(self, capability: str) -> bool:
         if capability in ['get_issue_comments', 'publish_inline_comments', 'get_labels', 'gfm_markdown',
-                          'publish_file_comments']:
+                            'publish_file_comments']:
             return False
         return True
 
@@ -309,6 +325,9 @@ class BitbucketProvider(GitProvider):
         self.publish_comment(pr_comment)
 
     def publish_comment(self, pr_comment: str, is_temporary: bool = False):
+        if is_temporary and not get_settings().config.publish_output_progress:
+            get_logger().debug(f"Skipping publish_comment for temporary comment: {pr_comment}")
+            return None
         pr_comment = self.limit_output_characters(pr_comment, self.max_comment_length)
         comment = self.pr.comment(pr_comment)
         if is_temporary:
