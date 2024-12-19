@@ -1,11 +1,12 @@
 import asyncio
 import multiprocessing
-from collections import deque
-import traceback
-from datetime import datetime, timezone
 import time
-import requests
+import traceback
+from collections import deque
+from datetime import datetime, timezone
+
 import aiohttp
+import requests
 
 from pr_agent.agent.pr_agent import PRAgent
 from pr_agent.config_loader import get_settings
@@ -83,6 +84,7 @@ async def is_valid_notification(notification, headers, handled_ids, session, use
                     return False, handled_ids
                 async with session.get(latest_comment, headers=headers) as comment_response:
                     check_prev_comments = False
+                    user_tag = "@" + user_id
                     if comment_response.status == 200:
                         comment = await comment_response.json()
                         if 'id' in comment:
@@ -100,7 +102,6 @@ async def is_valid_notification(notification, headers, handled_ids, session, use
                             get_logger().debug(f"no comment_body")
                             check_prev_comments = True
                         else:
-                            user_tag = "@" + user_id
                             if user_tag not in comment_body:
                                 get_logger().debug(f"user_tag not in comment_body")
                                 check_prev_comments = True

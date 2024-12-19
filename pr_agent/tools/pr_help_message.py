@@ -9,10 +9,10 @@ from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
 from pr_agent.algo.pr_processing import retry_with_fallback_models
 from pr_agent.algo.token_handler import TokenHandler
-from pr_agent.algo.utils import ModelType, load_yaml, clip_tokens
+from pr_agent.algo.utils import ModelType, clip_tokens, load_yaml
 from pr_agent.config_loader import get_settings
-from pr_agent.git_providers import GithubProvider, BitbucketServerProvider, \
-    get_git_provider_with_context
+from pr_agent.git_providers import (BitbucketServerProvider, GithubProvider,
+                                    get_git_provider_with_context)
 from pr_agent.log import get_logger
 
 
@@ -114,7 +114,7 @@ class PRHelpMessage:
                 self.vars['snippets'] = docs_prompt.strip()
 
                 # run the AI model
-                response = await retry_with_fallback_models(self._prepare_prediction, model_type=ModelType.REGULAR)
+                response = await retry_with_fallback_models(self._prepare_prediction, model_type=ModelType.WEAK)
                 response_yaml = load_yaml(response)
                 response_str = response_yaml.get('response')
                 relevant_sections = response_yaml.get('relevant_sections')

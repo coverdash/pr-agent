@@ -3,11 +3,12 @@ import os
 import tempfile
 
 from dynaconf import Dynaconf
+from starlette_context import context
 
 from pr_agent.config_loader import get_settings
-from pr_agent.git_providers import get_git_provider, get_git_provider_with_context
+from pr_agent.git_providers import (get_git_provider,
+                                    get_git_provider_with_context)
 from pr_agent.log import get_logger
-from starlette_context import context
 
 
 def apply_repo_settings(pr_url):
@@ -98,5 +99,5 @@ def set_claude_model():
     """
     model_claude = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
     get_settings().set('config.model', model_claude)
-    get_settings().set('config.model_turbo', model_claude)
+    get_settings().set('config.model_weak', model_claude)
     get_settings().set('config.fallback_models', [model_claude])
